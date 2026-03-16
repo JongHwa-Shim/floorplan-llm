@@ -146,6 +146,9 @@ floorplan-llm/
 ```bash
 # uv 기반 의존성 설치
 uv sync
+
+# 시스템 의존성 설치 (triton이 런타임에 C 코드를 컴파일하므로 필요)
+sudo apt-get update && sudo apt-get install -y gcc python3.12-dev
 ```
 
 **주요 의존성:**

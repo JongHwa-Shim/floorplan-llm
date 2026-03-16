@@ -51,6 +51,7 @@ training:
   eval_strategy: "epoch"
   logging_steps: 10
   report_to: "wandb"
+  project_name: "floorplan-llm"
   run_name: "floorplan-pre-stage"
   seed: 42
   # 체크포인트 최대 보존 수 (오래된 순서로 삭제)
