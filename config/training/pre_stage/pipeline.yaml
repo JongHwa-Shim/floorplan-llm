@@ -1,0 +1,61 @@
+hydra:
+  run:
+    dir: outputs/training/pre_stage/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+model:
+  user: "Qwen"                  # HuggingFace Hub 사용자(조직)명
+  name: "Qwen2.5-Coder-7B"     # 모델명 (로컬 저장 디렉토리명으로도 사용)
+  hub_id: "${model.user}/${model.name}"              # HuggingFace Hub 전체 경로 (자동 파생)
+  tokenizer_dir: "data/models/${model.name}/tokenization"       # 확장 토크나이저 경로 (자동 파생)
+  vocab_extension: "${model.tokenizer_dir}/vocab_extension.json" # vocab 확장 정보 경로 (자동 파생)
+
+quantization:
+  # 4bit 양자화 활성화 (embed_tokens, lm_head는 자동 제외)
+  load_in_4bit: true
+  bnb_4bit_compute_dtype: "bfloat16"
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_use_double_quant: false
+
+data:
+  # Arrow 데이터셋 경로
+  arrow_dir: "data/dataset/processed_dataset/rplan/arrow"
+  # 최대 시퀀스 길이 (초과 시 잘라냄)
+  max_length: 4096
+  # 증강 설정 yaml 경로 (프로젝트 루트 기준 상대경로)
+  aug_pipeline_config: "config/training/augmentation/pre_stage.yaml"
+
+resume:
+  enabled: false
+  # 특정 체크포인트 경로 직접 지정 (null이면 auto_find_latest 동작)
+  # 예: "data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/checkpoint-500"
+  checkpoint_path: null
+  # enabled=true이고 checkpoint_path=null이면 output_dir에서 최신 체크포인트 자동 탐색
+  auto_find_latest: true
+
+training:
+  output_dir: "data/models/${model.name}/checkpoints/pre_stage"
+  num_train_epochs: 5
+  per_device_train_batch_size: 2
+  per_device_eval_batch_size: 4
+  # 실효 배치 = per_device * gradient_accumulation_steps
+  gradient_accumulation_steps: 1
+  # Pre-Stage는 새 토큰 embedding 워밍업이므로 공격적인 LR 사용
+  learning_rate: 5.0e-4
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.05
+  weight_decay: 0.0
+  # 혼합 정밀도 (AMP): forward/backward bf16, optimizer state fp32
+  bf16: true
+  dataloader_num_workers: 4
+  save_strategy: "epoch"
+  eval_strategy: "epoch"
+  logging_steps: 10
+  report_to: "wandb"
+  run_name: "floorplan-pre-stage"
+  seed: 42
+  # 체크포인트 최대 보존 수 (오래된 순서로 삭제)
+  save_total_limit: 3
+  # 훈련 종료 시 eval_loss 기준 최고 체크포인트 가중치 복원
+  load_best_model_at_end: true
+  # 디버그용: 0이면 전체 학습
+  max_steps: 0
