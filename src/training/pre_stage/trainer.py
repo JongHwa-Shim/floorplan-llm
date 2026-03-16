@@ -171,6 +171,7 @@ def build_training_arguments(cfg: DictConfig) -> TrainingArguments:
     # max_steps가 0 이하면 num_train_epochs 기반으로 학습 (Trainer 기본 동작)
     max_steps = int(train_cfg.get("max_steps", 0))
 
+    os.environ["WANDB_PROJECT"] = train_cfg.project_name
     kwargs = dict(
         output_dir=train_cfg.output_dir,
         num_train_epochs=train_cfg.num_train_epochs,
