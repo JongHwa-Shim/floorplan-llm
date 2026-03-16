@@ -1,0 +1,43 @@
+# 방 타입별 색상 매핑 설정 (RGB)
+# 형식: [R, G, B] (0-255)
+room_colors:
+  outline: [80, 80, 80]              # 회색 - 윤곽선 (외벽 역할)
+  livingroom: [255, 220, 150]        # 따뜻한 노랑 - 거실
+  bedroom: [180, 210, 255]           # 하늘색 - 침실
+  kitchen: [200, 240, 200]           # 연두색 - 주방
+  bathroom: [180, 230, 240]          # 청록색 - 욕실
+  balcony: [230, 255, 220]           # 연한 초록 - 발코니
+  entrance: [255, 200, 180]          # 연한 주황 - 현관
+  storage: [220, 200, 255]           # 연한 보라 - 창고
+  studyroom: [255, 240, 180]         # 연한 노랑 - 서재
+  front_door: [255, 160, 100]        # 주황 - 현관문
+
+# 방 타입별 테두리 색상 (RGB)
+border_colors:
+  outline: [40, 40, 40]              # 윤곽선 테두리
+  livingroom: [200, 150, 50]
+  bedroom: [80, 130, 200]
+  kitchen: [80, 160, 80]
+  bathroom: [60, 150, 180]
+  balcony: [100, 180, 80]
+  entrance: [200, 120, 80]
+  storage: [130, 100, 200]
+  studyroom: [200, 160, 50]
+  front_door: [200, 100, 40]
+
+# 알 수 없는 타입의 기본 색상
+default_fill_color: [200, 200, 200]
+default_border_color: [100, 100, 100]
+
+# 문 시각화 색상
+door_color: [139, 90, 43]           # 갈색 - 문
+door_border_color: [80, 40, 10]     # 짙은 갈색 - 문 테두리
+front_door_color: [220, 80, 50]     # 빨간색 - 현관문
+
+# 시각화 설정
+vis_settings:
+  image_size: 256                   # 고정 출력 해상도 (256x256)
+  border_thickness: 1               # 테두리 두께 (최소값)
+  font_scale: 0.35                  # 텍스트 폰트 크기
+  alpha: 0.6                        # 채우기 투명도 (0.0-1.0)
+  background_color: [255, 255, 255] # 배경색 (흰색)

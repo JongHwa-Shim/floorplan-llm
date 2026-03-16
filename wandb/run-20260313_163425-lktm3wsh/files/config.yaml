@@ -1,0 +1,422 @@
+_name_or_path:
+    value: Qwen/Qwen2.5-Coder-7B
+_wandb:
+    value:
+        cli_version: 0.25.1
+        e:
+            bqbgdjbw31t7qwlcwqag1jpu4oqo4lnh:
+                codePath: scripts/training/run_pre_stage.py
+                codePathLocal: scripts/training/run_pre_stage.py
+                cpu_count: 12
+                cpu_count_logical: 24
+                cudaVersion: "13.1"
+                disk:
+                    /:
+                        total: "1081101176832"
+                        used: "33523019776"
+                email: jonghwashim7@gmail.com
+                executable: /home/jhs/app/floorplan-llm/.venv/bin/python3
+                gpu: NVIDIA GeForce RTX 3090
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ampere
+                      memoryTotal: "25769803776"
+                      name: NVIDIA GeForce RTX 3090
+                      uuid: GPU-5b038c7b-e9e0-47a4-e733-93c831e10267
+                host: JHS-MILAB
+                memory:
+                    total: "16653643776"
+                os: Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39
+                program: /home/jhs/app/floorplan-llm/scripts/training/run_pre_stage.py
+                python: CPython 3.11.14
+                root: /home/jhs/app/floorplan-llm
+                startedAt: "2026-03-13T07:34:25.478492Z"
+                writerId: bqbgdjbw31t7qwlcwqag1jpu4oqo4lnh
+        m:
+            - "1": train/global_step
+              "6":
+                - 3
+              "7": []
+            - "2": '*'
+              "5": 1
+              "6":
+                - 1
+              "7": []
+        python_version: 3.11.14
+        t:
+            "1":
+                - 1
+                - 11
+                - 49
+                - 50
+                - 51
+                - 71
+                - 98
+                - 105
+            "2":
+                - 1
+                - 11
+                - 49
+                - 50
+                - 51
+                - 71
+                - 98
+                - 105
+            "3":
+                - 7
+                - 13
+                - 19
+                - 66
+            "4": 3.11.14
+            "5": 0.25.1
+            "6": 5.2.0
+            "9":
+                "1": transformers_trainer
+            "12": 0.25.1
+            "13": linux-x86_64
+accelerator_config:
+    value:
+        dispatch_batches: null
+        even_batches: true
+        gradient_accumulation_kwargs: null
+        non_blocking: false
+        split_batches: false
+        use_seedable_sampler: true
+adam_beta1:
+    value: 0.9
+adam_beta2:
+    value: 0.999
+adam_epsilon:
+    value: 1e-08
+architectures:
+    value:
+        - Qwen2ForCausalLM
+attention_dropout:
+    value: 0
+auto_find_batch_size:
+    value: false
+average_tokens_across_devices:
+    value: true
+batch_eval_metrics:
+    value: false
+bf16:
+    value: true
+bf16_full_eval:
+    value: false
+bos_token_id:
+    value: null
+chunk_size_feed_forward:
+    value: 0
+data_seed:
+    value: null
+dataloader_drop_last:
+    value: false
+dataloader_num_workers:
+    value: 4
+dataloader_persistent_workers:
+    value: false
+dataloader_pin_memory:
+    value: true
+dataloader_prefetch_factor:
+    value: null
+ddp_backend:
+    value: null
+ddp_broadcast_buffers:
+    value: null
+ddp_bucket_cap_mb:
+    value: null
+ddp_find_unused_parameters:
+    value: null
+ddp_timeout:
+    value: 1800
+debug:
+    value: []
+deepspeed:
+    value: null
+disable_tqdm:
+    value: false
+do_eval:
+    value: true
+do_predict:
+    value: false
+do_train:
+    value: false
+dtype:
+    value: bfloat16
+enable_jit_checkpoint:
+    value: false
+eos_token_id:
+    value: 151643
+eval_accumulation_steps:
+    value: null
+eval_delay:
+    value: 0
+eval_do_concat_batches:
+    value: true
+eval_on_start:
+    value: false
+eval_steps:
+    value: null
+eval_strategy:
+    value: epoch
+eval_use_gather_object:
+    value: false
+fp16:
+    value: false
+fp16_full_eval:
+    value: false
+fsdp:
+    value: []
+fsdp_config:
+    value:
+        min_num_params: 0
+        xla: false
+        xla_fsdp_grad_ckpt: false
+        xla_fsdp_v2: false
+full_determinism:
+    value: false
+gradient_accumulation_steps:
+    value: 1
+gradient_checkpointing:
+    value: false
+gradient_checkpointing_kwargs:
+    value: null
+greater_is_better:
+    value: false
+hidden_act:
+    value: silu
+hidden_size:
+    value: 3584
+hub_always_push:
+    value: false
+hub_model_id:
+    value: null
+hub_private_repo:
+    value: null
+hub_revision:
+    value: null
+hub_strategy:
+    value: every_save
+hub_token:
+    value: <HUB_TOKEN>
+id2label:
+    value:
+        "0": LABEL_0
+        "1": LABEL_1
+ignore_data_skip:
+    value: false
+include_for_metrics:
+    value: []
+include_num_input_tokens_seen:
+    value: "no"
+initializer_range:
+    value: 0.02
+intermediate_size:
+    value: 18944
+is_encoder_decoder:
+    value: false
+label_names:
+    value:
+        - labels
+label_smoothing_factor:
+    value: 0
+label2id:
+    value:
+        LABEL_0: 0
+        LABEL_1: 1
+layer_types:
+    value:
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+        - full_attention
+learning_rate:
+    value: 0.0005
+length_column_name:
+    value: length
+liger_kernel_config:
+    value: null
+load_best_model_at_end:
+    value: true
+local_rank:
+    value: -1
+log_level:
+    value: passive
+log_level_replica:
+    value: warning
+log_on_each_node:
+    value: true
+logging_dir:
+    value: null
+logging_first_step:
+    value: false
+logging_nan_inf_filter:
+    value: true
+logging_steps:
+    value: 10
+logging_strategy:
+    value: steps
+lr_scheduler_kwargs:
+    value: null
+lr_scheduler_type:
+    value: cosine
+max_grad_norm:
+    value: 1
+max_position_embeddings:
+    value: 32768
+max_steps:
+    value: -1
+max_window_layers:
+    value: 28
+metric_for_best_model:
+    value: eval_loss
+model/num_parameters:
+    value: 7620884992
+model_type:
+    value: qwen2
+neftune_noise_alpha:
+    value: null
+num_attention_heads:
+    value: 28
+num_hidden_layers:
+    value: 28
+num_key_value_heads:
+    value: 4
+num_train_epochs:
+    value: 5
+optim:
+    value: adamw_torch
+optim_args:
+    value: null
+optim_target_modules:
+    value: null
+output_attentions:
+    value: false
+output_dir:
+    value: data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage
+output_hidden_states:
+    value: false
+pad_token_id:
+    value: 151643
+parallelism_config:
+    value: null
+per_device_eval_batch_size:
+    value: 4
+per_device_train_batch_size:
+    value: 2
+prediction_loss_only:
+    value: false
+problem_type:
+    value: null
+project:
+    value: huggingface
+push_to_hub:
+    value: false
+quantization_config:
+    value:
+        _load_in_4bit: true
+        _load_in_8bit: false
+        bnb_4bit_compute_dtype: bfloat16
+        bnb_4bit_quant_storage: uint8
+        bnb_4bit_quant_type: nf4
+        bnb_4bit_use_double_quant: false
+        llm_int8_enable_fp32_cpu_offload: false
+        llm_int8_has_fp16_weight: false
+        llm_int8_skip_modules: null
+        llm_int8_threshold: 6
+        load_in_4bit: true
+        load_in_8bit: false
+        quant_method: BITS_AND_BYTES
+remove_unused_columns:
+    value: true
+report_to:
+    value:
+        - wandb
+restore_callback_states_from_checkpoint:
+    value: false
+resume_from_checkpoint:
+    value: null
+return_dict:
+    value: true
+rms_norm_eps:
+    value: 1e-06
+rope_parameters:
+    value:
+        rope_theta: 1e+06
+        rope_type: default
+run_name:
+    value: floorplan-pre-stage
+save_on_each_node:
+    value: false
+save_only_model:
+    value: false
+save_steps:
+    value: 500
+save_strategy:
+    value: epoch
+save_total_limit:
+    value: 3
+seed:
+    value: 42
+skip_memory_metrics:
+    value: true
+sliding_window:
+    value: null
+tf32:
+    value: null
+tie_word_embeddings:
+    value: false
+torch_compile:
+    value: false
+torch_compile_backend:
+    value: null
+torch_compile_mode:
+    value: null
+torch_empty_cache_steps:
+    value: null
+trackio_space_id:
+    value: trackio
+train_sampling_strategy:
+    value: random
+transformers_version:
+    value: 5.2.0
+use_cache:
+    value: false
+use_cpu:
+    value: false
+use_liger_kernel:
+    value: false
+use_sliding_window:
+    value: false
+vocab_size:
+    value: 152232
+warmup_ratio:
+    value: 0.05
+warmup_steps:
+    value: 0.05
+weight_decay:
+    value: 0

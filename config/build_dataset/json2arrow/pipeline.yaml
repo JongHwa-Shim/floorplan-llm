@@ -1,0 +1,27 @@
+# JSONL → Arrow 변환 파이프라인 설정
+
+# Hydra 실행 로그 저장 경로: outputs/build_dataset/json2arrow/YYYY-MM-DD/HH-MM-SS/
+hydra:
+  run:
+    dir: outputs/build_dataset/json2arrow/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+data:
+  input_dir: "data/dataset/processed_dataset/rplan/jsonl"   # JSONL 샤드 디렉토리
+  output_dir: "data/dataset/processed_dataset/rplan/arrow"  # Arrow 출력 디렉토리
+  input_pattern: "floorplans_*.jsonl"                        # 처리 대상 파일 패턴
+
+validation:
+  enabled: true
+  num_samples: 10    # 검증할 랜덤 샘플 수
+  seed: 42
+
+# train/validation/test split 설정
+split:
+  enabled: true      # true이면 DatasetDict로 저장, false이면 단일 Dataset으로 저장
+  val_ratio: 0.001   # validation 비율
+  test_ratio: 0.005  # test 비율
+  seed: 42
+
+# 실행 모드
+mode: batch          # batch | single
+target_file: null    # single 모드 시 대상 파일명 (예: floorplans_0000.jsonl)

@@ -1,0 +1,25 @@
+{
+  "type_name_map": {
+    "0": "livingroom",
+    "1": "masterroom",
+    "2": "kitchen",
+    "3": "bathroom",
+    "4": "diningroom",
+    "5": "childroom",
+    "6": "studyroom",
+    "7": "secondroom",
+    "8": "guestroom",
+    "9": "balcony",
+    "10": "entrance",
+    "11": "storage",
+    "12": "walkin"
+  },
+  "merge_rules": {
+    "masterroom": "bedroom",
+    "childroom": "bedroom",
+    "secondroom": "bedroom",
+    "guestroom": "bedroom",
+    "diningroom": "livingroom",
+    "walkin": "storage"
+  }
+}

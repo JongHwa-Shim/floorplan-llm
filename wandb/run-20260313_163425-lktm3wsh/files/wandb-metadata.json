@@ -1,0 +1,35 @@
+{
+  "os": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "python": "CPython 3.11.14",
+  "startedAt": "2026-03-13T07:34:25.478492Z",
+  "program": "/home/jhs/app/floorplan-llm/scripts/training/run_pre_stage.py",
+  "codePath": "scripts/training/run_pre_stage.py",
+  "codePathLocal": "scripts/training/run_pre_stage.py",
+  "email": "jonghwashim7@gmail.com",
+  "root": "/home/jhs/app/floorplan-llm",
+  "host": "JHS-MILAB",
+  "executable": "/home/jhs/app/floorplan-llm/.venv/bin/python3",
+  "cpu_count": 12,
+  "cpu_count_logical": 24,
+  "gpu": "NVIDIA GeForce RTX 3090",
+  "gpu_count": 1,
+  "disk": {
+    "/": {
+      "total": "1081101176832",
+      "used": "33523019776"
+    }
+  },
+  "memory": {
+    "total": "16653643776"
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA GeForce RTX 3090",
+      "memoryTotal": "25769803776",
+      "architecture": "Ampere",
+      "uuid": "GPU-5b038c7b-e9e0-47a4-e733-93c831e10267"
+    }
+  ],
+  "cudaVersion": "13.1",
+  "writerId": "bqbgdjbw31t7qwlcwqag1jpu4oqo4lnh"
+}

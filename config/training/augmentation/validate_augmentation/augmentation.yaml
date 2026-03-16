@@ -1,0 +1,50 @@
+# 데이터 증강 파이프라인 설정
+# AugmentationConfig 파라미터 정의
+# DataLoader에서 config_from_omegaconf(cfg.augmentation)로 로드한다.
+
+shuffle:
+  # 변형 기반 증강 적용 여부 (true/false)
+  rid: true              # ShuffleRID — 방 ID 번호 재배정
+  vertex_order: true     # ShuffleVertexOrder — 꼭지점 시작점 회전
+  room_order: true       # ShuffleRoomOrder — 방 나열 순서 셔플 (입력만)
+  edge_order: true       # ShuffleEdgeOrder — 엣지 나열 순서 셔플 (입력만)
+  spatial_order: true    # ShuffleSpatialOrder — spatial 나열 순서 셔플 (입력만)
+  reverse_spatial: true  # ReverseSpatialRelation — spatial 방향 랜덤 역전 (입력만)
+
+transform:
+  # 기하학적 변형 증강 (INPUT + OUTPUT 모두 반영)
+  translate: true      # Translate    — x/y 평행이동 (256×256 경계 보장)
+  flip: true           # Flip         — 수평(H)/수직(V)/양방향(HV) 뒤집기
+  scale_aspect: true   # ScaleAspect  — 종횡비 변경 (x/y 독립 스케일)
+  scale_aspect_min: 0.7   # ScaleAspect 스케일 최솟값
+  scale_aspect_max: 1.3   # ScaleAspect 스케일 상한값 (256 경계 기반 자동 계산값보다 크면 자동 계산값이 우선)
+  zoom: true           # Zoom         — 균일 확대/축소
+  zoom_min: 0.7           # Zoom 스케일 최솟값
+  zoom_max: 1.3           # Zoom 스케일 상한값 (256 경계 기반 자동 계산값보다 크면 자동 계산값이 우선)
+
+noise:
+  # 좌표 노이즈 증강 (INPUT 전용)
+  p_noise: 0.50        # 샘플 단위 적용 확률
+  noise_sigma: 3.0     # 가우시안 표준편차 (픽셀)
+
+drop:
+  # 삭제 기반 증강 확률 (0.0 ~ 1.0)
+  # 방 블록: DropBlock + DropType + DropCoords <= 1.0 권장 (mutually exclusive, 잔여 확률은 데이터 그대로 유지)
+  p_drop_block:  0.5   # DropBlock  — 방 블록 전체 삭제
+  p_drop_type:   0.20   # DropType   — 방 종류 토큰만 삭제
+  p_drop_coords: 0.20   # DropCoords — 방 좌표 블록만 삭제
+  # 엣지: DropEdge + DropEdgePair + DropEdgeDoor <= 1.0 권장 (mutually exclusive, 잔여 확률은 데이터 그대로 유지)
+  p_drop_edge: 0.5     # DropEdge     — 엣지 전체 삭제
+  p_drop_pair: 0.20     # DropEdgePair — RID 쌍 정보 삭제 (one|both 랜덤)
+  p_drop_door: 0.20     # DropEdgeDoor — 문 정보 삭제 (position|orientation|all 랜덤)
+  # 위치관계(Spatial) (잔여 확률은 데이터 그대로 유지)
+  p_drop_spatial:         0.8   # DropSpatial         — 개별 spatial 항목 삭제
+  # 현관문: DropFrontDoor + DropFrontDoorCoords <= 1.0  권장 (mutually exclusive, 잔여 확률은 데이터 그대로 유지)
+  p_drop_front_door:      0.50   # DropFrontDoor       — 현관문 블록 전체 삭제
+  p_drop_front_door_coords: 0.40 # DropFrontDoorCoords — 현관문 좌표만 삭제
+
+room_summary:
+  # 방 요약 블록 삭제 증강 (INPUT 전용)
+  # DropRoomSummaryTotal + DropRoomSummaryType은 독립 확률 (mutually exclusive 아님)
+  p_drop_total: 0.50  # DropRoomSummaryTotal — <TOTAL>N 쌍 전체 삭제
+  p_drop_type:  0.60  # DropRoomSummaryType  — 개별 <TYPE:t><COUNT>N 쌍 삭제

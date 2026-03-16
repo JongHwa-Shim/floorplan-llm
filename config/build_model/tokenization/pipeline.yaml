@@ -1,0 +1,23 @@
+# Vocabulary 빌드 파이프라인 설정
+
+# Hydra 실행 로그 저장 경로: outputs/build_model/tokenization/YYYY-MM-DD/HH-MM-SS/
+hydra:
+  run:
+    dir: outputs/build_model/tokenization/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+model:
+  user: "Qwen"                  # HuggingFace Hub 사용자(조직)명
+  name: "Qwen2.5-Coder-7B"     # 모델명 (로컬 저장 디렉토리명으로도 사용)
+  hub_id: "${model.user}/${model.name}"  # HuggingFace Hub 전체 경로 (자동 파생)
+
+data:
+  room_type_merge_config: "config/build_dataset/rplan2json/room_type_merge.json"
+
+tokens:
+  max_rid: 15      # <RID:0> ~ <RID:max_rid> 생성 (방 인스턴스 ID 최대값)
+  max_coord_x: 255 # <X:0> ~ <X:max_coord_x> 생성
+  max_coord_y: 255 # <Y:0> ~ <Y:max_coord_y> 생성
+
+output:
+  # model.name 보간: 모델별 독립 저장 경로 자동 파생
+  dir: "data/models/${model.name}/tokenization"

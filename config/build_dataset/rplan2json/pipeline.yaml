@@ -1,0 +1,42 @@
+# 평면도 정보 추출 파이프라인 하이퍼파라미터
+
+# Hydra 실행 로그 저장 경로: outputs/build_dataset/rplan2json/YYYY-MM-DD/HH-MM-SS/
+hydra:
+  run:
+    dir: outputs/build_dataset/rplan2json/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+data:
+  raw_dataset_dir: "data/dataset/raw_dataset/rplan/dataset"
+  output_dir: "data/dataset/processed_dataset/rplan/jsonl"
+  room_type_merge_config: "config/build_dataset/rplan2json/room_type_merge.json"
+
+processing:
+  min_room_area: 30            # Step 3: 최소 방 면적 (픽셀 수)
+  approx_epsilon: 0.02         # Step 4: approxPolyDP epsilon (둘레 대비 비율)
+  min_door_pixels: 5           # Step 7: 인테리어 문 최소 픽셀 수
+  door_dilation_kernel: 5      # Step 8: 문-방 경계 매칭 dilation 커널 크기
+  room_connectivity: 4         # Step 3: 방 CCL 연결성
+  door_connectivity: 4         # Step 6,7: 문 CCL 연결성 (직각 인접 문 분리를 위해 4 사용)
+
+# BGRA 채널 인덱스
+channel:
+  B: 0   # 구조 레이블 (Exterior wall=127, Front door=255)
+  G: 1   # 공간 타입 (0~17)
+  R: 2   # 방 인스턴스 ID
+  A: 3   # 영역 구분 (Exterior=0, Interior=255)
+
+# G채널 공간 타입 값
+space_type:
+  room_types: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  exterior_wall: 14
+  front_door: 15
+  interior_door: 17
+
+# 배치 처리 설정
+batch:
+  num_workers: 8
+  output_shard_size: 10000     # JSONL 샤드당 레코드 수
+
+# 실행 모드 설정
+mode: batch                    # batch | single
+target_file: null              # single 모드 시 대상 파일명
