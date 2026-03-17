@@ -1,21 +1,21 @@
 """
-평면도 JSONL 시각화 실행 스크립트.
+평면도 JSONL 시각화 스크립트.
 
 지정한 JSONL 파일(들)에서 특정 plan_id 또는 전체 평면도를 읽어
 이미지로 시각화한다.
 
 사용 예시:
     # 특정 plan_id 하나 시각화
-    uv run python scripts/visualize_json/run_visualization.py --plan_id 0
+    uv run python tests/build_dataset/rplan2json/visualize_jsonl.py --plan_id 0
 
     # 여러 plan_id 시각화
-    uv run python scripts/visualize_json/run_visualization.py --plan_id 0 1 5
+    uv run python tests/build_dataset/rplan2json/visualize_jsonl.py --plan_id 0 1 5
 
     # 전체 평면도 시각화
-    uv run python scripts/visualize_json/run_visualization.py --all
+    uv run python tests/build_dataset/rplan2json/visualize_jsonl.py --all
 
     # 특정 JSONL 파일 지정
-    uv run python scripts/visualize_json/run_visualization.py --plan_id 0 \\
+    uv run python tests/build_dataset/rplan2json/visualize_jsonl.py --plan_id 0 \\
         --jsonl_dir data/dataset/processed_dataset/rplan/jsonl \\
         --jsonl_pattern "floorplans_*.jsonl"
 """

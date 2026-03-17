@@ -116,18 +116,21 @@ def _apply_coord_transform(
         ]
 
     # 현관문 center 좌표 (float 유지)
+    # Mod Record: scale/zoom의 안전 범위가 outline bbox(정수) 기준이라 문 좌표(float)가
+    # 미세하게 _MAX_COORD를 초과할 수 있음 → tokenizer의 round() 후 256이 되어 KeyError 발생.
+    # 변환 후 [0, _MAX_COORD] 클램프로 방어.
     if sample["front_door"] is not None:
         fd = sample["front_door"]
-        fd["x"] = tx(fd["x"])
-        fd["y"] = ty(fd["y"])
+        fd["x"] = max(0.0, min(tx(fd["x"]), float(_MAX_COORD)))
+        fd["y"] = max(0.0, min(ty(fd["y"]), float(_MAX_COORD)))
         fd["w"] = fd["w"] * scale_wh_x
         fd["h"] = fd["h"] * scale_wh_y
 
-    # 엣지 문 center 좌표 (float 유지)
+    # 엣지 문 center 좌표 (float 유지, 동일 클램프 적용)
     for edge in sample["edges"]:
         for door in edge["door"]:
-            door["x"] = tx(door["x"])
-            door["y"] = ty(door["y"])
+            door["x"] = max(0.0, min(tx(door["x"]), float(_MAX_COORD)))
+            door["y"] = max(0.0, min(ty(door["y"]), float(_MAX_COORD)))
             door["w"] = door["w"] * scale_wh_x
             door["h"] = door["h"] * scale_wh_y
 

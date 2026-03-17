@@ -80,12 +80,9 @@ floorplan-llm/
 ├── scripts/                        # CLI 실행 진입점
 │   ├── build_dataset/
 │   │   ├── rplan2json/
-│   │   │   ├── run_extraction.py   # PNG 배치 처리
-│   │   │   └── validate_jsonl.py   # JSONL 검증
-│   │   ├── json2arrow/
-│   │   │   └── run_conversion.py   # Arrow 변환 실행
-│   │   └── visualize_json/
-│   │       └── run_visualization.py # 평면도 시각화
+│   │   │   └── run_extraction.py   # PNG 배치 처리
+│   │   └── json2arrow/
+│   │       └── run_conversion.py   # Arrow 변환 실행
 │   ├── build_model/
 │   │   └── tokenization/
 │   │       └── build_vocab.py      # 어휘 빌드 실행
@@ -93,6 +90,15 @@ floorplan-llm/
 │       ├── augmentation/
 │       │   └── validate_augmentation.py # 증강 결과 검증
 │       └── run_pre_stage.py        # Pre-Stage 훈련 실행
+│
+├── tests/                          # 검증 및 시각화 스크립트 (핵심 파이프라인 외)
+│   ├── build_dataset/
+│   │   └── rplan2json/
+│   │       ├── validate_jsonl.py   # JSONL 스키마 무결성 검증
+│   │       └── visualize_jsonl.py  # 평면도 JSONL 시각화
+│   └── training/
+│       └── pre_stage/
+│           └── validate_resume.py  # Resume 체크포인트 복원 검증
 │
 ├── data/                           # 데이터 저장소 (Git 추적 제외)
 │   ├── dataset/
@@ -229,11 +235,11 @@ uv run python scripts/build_dataset/rplan2json/run_extraction.py \
 ### Step 1 검증: JSONL 유효성 검사
 
 ```bash
-uv run python scripts/build_dataset/rplan2json/validate_jsonl.py \
+uv run python tests/build_dataset/rplan2json/validate_jsonl.py \
     data/dataset/processed_dataset/rplan/jsonl/floorplans_0000.jsonl
 
 # 리포트 파일 저장
-uv run python scripts/build_dataset/rplan2json/validate_jsonl.py \
+uv run python tests/build_dataset/rplan2json/validate_jsonl.py \
     data/dataset/processed_dataset/rplan/jsonl/floorplans_0000.jsonl \
     -o report.txt
 ```
@@ -243,7 +249,11 @@ uv run python scripts/build_dataset/rplan2json/validate_jsonl.py \
 ### Step 1 시각화: JSONL 시각화
 
 ```bash
-uv run python scripts/build_dataset/visualize_json/run_visualization.py
+# 특정 plan_id 시각화
+uv run python tests/build_dataset/rplan2json/visualize_jsonl.py --plan_id 0 1 5
+
+# 전체 시각화
+uv run python tests/build_dataset/rplan2json/visualize_jsonl.py --all
 ```
 
 ---
@@ -339,6 +349,19 @@ uv run python scripts/training/run_pre_stage.py \
 uv run python scripts/training/run_pre_stage.py \
     resume.enabled=true \
     resume.checkpoint_path=data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/checkpoint-500
+```
+
+### Pre-Stage 검증: Resume 체크포인트 확인
+
+체크포인트의 `partial_state.pt`가 올바르게 저장되어 있는지, Resume 시 new_embed/new_lm_head 복원이 가능한지 확인한다.
+
+```bash
+# 최신 체크포인트 자동 탐색 검증
+uv run python tests/training/pre_stage/validate_resume.py
+
+# 특정 체크포인트 지정 검증
+uv run python tests/training/pre_stage/validate_resume.py \
+    --checkpoint data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/checkpoint-80304
 ```
 
 **출력:**

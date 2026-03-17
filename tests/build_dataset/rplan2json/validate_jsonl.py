@@ -3,9 +3,9 @@
 생성된 JSONL 파일의 스키마 및 데이터 무결성을 검증한다.
 
 Usage:
-    python scripts/rplan2json/validate_jsonl.py data/dataset/processed_dataset/rplan/jsonl/floorplans_0000.jsonl
-    python scripts/rplan2json/validate_jsonl.py data/dataset/processed_dataset/rplan/jsonl/floorplans_0000.jsonl -o report.txt
-    python scripts/rplan2json/validate_jsonl.py data/dataset/processed_dataset/rplan/jsonl/floorplans_0000.jsonl --no-output
+    uv run python tests/build_dataset/rplan2json/validate_jsonl.py data/dataset/processed_dataset/rplan/jsonl/floorplans_0000.jsonl
+    uv run python tests/build_dataset/rplan2json/validate_jsonl.py data/dataset/processed_dataset/rplan/jsonl/floorplans_0000.jsonl -o report.txt
+    uv run python tests/build_dataset/rplan2json/validate_jsonl.py data/dataset/processed_dataset/rplan/jsonl/floorplans_0000.jsonl --no-output
 """
 
 from __future__ import annotations

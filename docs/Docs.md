@@ -607,8 +607,10 @@ data/models/{model.name}/checkpoints/pre_stage/
 **Resume 로드 흐름:**
 - HF 표준 체크포인트에서 모델 로드 (merge된 embed_tokens.weight 포함)
 - `_setup_partial_training()` — 병합된 가중치에서 new_embed 자동 초기화
-- `trainer.train(resume_from_checkpoint=...)` — optimizer state / step 복원
-- optimizer.pt의 param shape이 새 PartialEmbedding과 동일하므로 정상 로드됨
+- `trainer.train(resume_from_checkpoint=...)` → `_load_from_checkpoint` 오버라이드 호출
+  1. `super()._load_from_checkpoint()` — transformer 레이어 quantized 가중치 복원 (key mismatch로 embed_tokens/lm_head는 스킵, missing keys 경고는 정상)
+  2. `partial_state.pt` 로드 — new_embed/new_lm_head를 훈련된 값으로 직접 복원
+- optimizer.pt에서 AdamW state / step 복원
 
 **`_load_best_model` 오버라이드:**
 `load_best_model_at_end=true` 시 표준 모델 재로드 대신 `partial_state.pt`에서 new_embed/new_lm_head만 직접 복사한다 (key mismatch 방지).
@@ -659,10 +661,11 @@ You are a floor plan generator. Given room conditions, generate complete floorpl
 | `src/training/pre_stage/model_loader.py` | 4bit 로드 + `prepare_model_for_kbit_training` + `PartialEmbedding`/`PartialLMHead` 교체 + `merge_and_restore` |
 | `src/training/pre_stage/dataset.py` | Arrow 로드 → 증강 → Chat Template 적용 → `{input_ids, labels, attention_mask}` |
 | `src/training/pre_stage/collator.py` | Dynamic padding + label 마스킹 |
-| `src/training/pre_stage/trainer.py` | `TrainingArguments` 구성 + `PreStageTrainer` 빌드 (`_save_checkpoint`, `_load_best_model` 오버라이드 포함) |
+| `src/training/pre_stage/trainer.py` | `TrainingArguments` 구성 + `PreStageTrainer` 빌드 (`_save_checkpoint`, `_load_from_checkpoint`, `_load_best_model` 오버라이드 포함) |
 | `scripts/training/run_pre_stage.py` | Hydra 진입점, seed 고정, Resume 분기, 훈련 후 `merge_and_restore` 호출 및 저장 |
 | `config/training/pre_stage/pipeline.yaml` | 모델, 양자화, 데이터, 훈련 하이퍼파라미터, resume 설정 |
 | `config/training/augmentation/pre_stage.yaml` | Pre-Stage용 증강 파라미터 (Hydra config group, `cfg.augmentation`으로 병합) |
+| `tests/training/pre_stage/validate_resume.py` | Resume 체크포인트 검증 스크립트 (partial_state.pt 존재/형태/복원 확인) |
 
 ### 체크포인트 및 출력
 
@@ -738,5 +741,6 @@ RLVR 기반 강화학습으로 규칙 기반 보상 함수를 적용한다. 방 
 
 ```bash
 # 현재 사용 가능: JSONL 시각화
-uv run python scripts/build_dataset/visualize_json/run_visualization.py
+uv run python tests/build_dataset/rplan2json/visualize_jsonl.py --plan_id 0 1 5
+uv run python tests/build_dataset/rplan2json/visualize_jsonl.py --all
 ```
