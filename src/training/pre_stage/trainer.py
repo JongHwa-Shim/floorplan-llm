@@ -117,6 +117,53 @@ class PreStageTrainer(Trainer):
         _setup_partial_training(model, self._new_token_ids)
         logger.info("체크포인트 저장 완료, PartialEmbedding/PartialLMHead 재적용")
 
+    def _load_from_checkpoint(self, resume_from_checkpoint: str, model=None):
+        """체크포인트에서 모델 복원.
+
+        Trainer 기본 구현은 state_dict key mismatch로 PartialEmbedding의
+        new_embed/new_lm_head를 로드하지 못한다 (체크포인트는 merge 후 표준 HF 형식).
+        super() 호출로 transformer 레이어 quantized 가중치를 복원한 뒤,
+        partial_state.pt에서 new_embed/new_lm_head를 직접 복원한다.
+
+        Args:
+            resume_from_checkpoint: 체크포인트 디렉토리 경로.
+            model: 복원 대상 모델. None이면 self.model 사용.
+
+        Raises:
+            없음. partial_state.pt 부재 시 경고 후 계속.
+        """
+        # 1. Trainer 기본: transformer 레이어 quantized 가중치 복원
+        #    (embed_tokens/lm_head는 key mismatch로 스킵 → missing keys 경고는 정상)
+        super()._load_from_checkpoint(resume_from_checkpoint, model)
+
+        # 2. partial_state.pt에서 new_embed/new_lm_head 복원
+        # Mod Record: Trainer 기본 _load_from_checkpoint는 PartialEmbedding key를 로드
+        # 못해 trained embed 값이 초기화 상태로 재시작되는 버그 발생. partial_state.pt로 직접 복원.
+        partial_state_path = Path(resume_from_checkpoint) / "partial_state.pt"
+        if not partial_state_path.exists():
+            logger.warning(
+                f"partial_state.pt 없음: {partial_state_path} — new_embed/new_lm_head가 "
+                "초기값으로 유지됩니다. 첫 체크포인트라면 정상입니다."
+            )
+            return
+
+        target_model = model if model is not None else self.model
+        embed = target_model.model.embed_tokens
+        lm_head = target_model.lm_head
+
+        if not isinstance(embed, PartialEmbedding) or not isinstance(lm_head, PartialLMHead):
+            logger.warning("embed_tokens 또는 lm_head가 Partial 모듈이 아님. partial_state 로드 건너뜀.")
+            return
+
+        partial_state = torch.load(
+            partial_state_path, map_location="cpu", weights_only=True
+        )
+        embed.new_embed.data.copy_(partial_state["new_embed"].to(embed.new_embed.device))
+        lm_head.new_lm_head.data.copy_(partial_state["new_lm_head"].to(lm_head.new_lm_head.device))
+        logger.info(
+            f"Resume: partial_state.pt 복원 완료 (step={resume_from_checkpoint.split('-')[-1]})"
+        )
+
     def _load_best_model(self):
         """최고 성능 체크포인트에서 partial_state.pt로 new_embed/new_lm_head 복원.
 
