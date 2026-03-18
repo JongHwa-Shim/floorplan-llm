@@ -98,7 +98,8 @@ floorplan-llm/
 │   │       └── visualize_jsonl.py  # 평면도 JSONL 시각화
 │   └── training/
 │       └── pre_stage/
-│           └── validate_resume.py  # Resume 체크포인트 복원 검증
+│           ├── validate_resume.py          # Resume 체크포인트 복원 검증
+│           └── validate_save_and_load.py   # 저장/로드 후 optimizer 업데이트 정상 동작 검증
 │
 ├── data/                           # 데이터 저장소 (Git 추적 제외)
 │   ├── dataset/
@@ -364,9 +365,32 @@ uv run python tests/training/pre_stage/validate_resume.py \
     --checkpoint data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/checkpoint-80304
 ```
 
-**출력:**
-- `data/models/{model.name}/checkpoints/pre_stage/checkpoint-*/` — 에폭별 자동 저장 (최대 `save_total_limit`개 보존)
-- `data/models/{model.name}/checkpoints/pre_stage/final/` — 최종 병합 모델 (표준 HuggingFace 형식)
+---
+
+### Pre-Stage 검증: 저장/로드 후 optimizer 업데이트 검증
+
+체크포인트 저장 후 optimizer의 Parameter 참조가 유지되어 훈련이 정상적으로 계속되는지 검증한다.
+
+**검증 시나리오:**
+- **Case 1 (연속 훈련):** 체크포인트 저장 후에도 new_embed가 계속 업데이트되는지 확인 (저장 전후 파라미터가 달라야 함)
+- **Case 2 (Resume):** Phase 1 훈련 → 체크포인트 저장 → 새 모델 로드 → Resume → Phase 2 훈련이 정상적으로 이어지는지 확인
+
+```bash
+uv run python tests/training/pre_stage/validate_save_and_load.py
+```
+
+> 임시 출력 디렉토리 (`data/temp/validate_save_load`)가 자동 생성/삭제된다.
+> 두 케이스 모두 `PASS`가 출력되어야 정상.
+
+**Pre-Stage 체크포인트 출력 구조:**
+```
+data/models/{model.name}/checkpoints/pre_stage/
+├── checkpoint-{step}/          # 에폭별 자동 저장 (최대 save_total_limit개 보존)
+│   ├── partial_state.pt        # new_embed / new_lm_head 가중치 (model.safetensors 없음)
+│   ├── optimizer.pt            # AdamW state (~16MB)
+│   └── trainer_state.json
+└── final/                      # 최종 병합 모델 (표준 HuggingFace 형식, tokenizer 포함)
+```
 
 ---
 

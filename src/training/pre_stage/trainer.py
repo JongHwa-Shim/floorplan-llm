@@ -19,8 +19,6 @@ from src.training.pre_stage.collator import PreStageCollator
 from src.training.pre_stage.model_loader import (
     PartialEmbedding,
     PartialLMHead,
-    merge_and_restore,
-    _setup_partial_training,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,10 +31,14 @@ class PreStageTrainer(Trainer):
     gradient 기반 학습이 가능하다. 그러나 transformers.Trainer는 PEFT 어댑터 없는
     quantized model을 일괄 거부하므로, 초기화 시 해당 검증을 일시 우회한다.
 
-    체크포인트 저장/로드 시 PartialEmbedding ↔ 표준 HF 형식 변환을 자동으로 처리한다.
+    체크포인트 저장: partial_state.pt + optimizer/scheduler/trainer_state만 저장.
+      model.safetensors는 저장하지 않음 (transformer 레이어는 항상 HF에서 새로 로드,
+      new_embed/new_lm_head는 partial_state.pt로 관리).
+    체크포인트 로드: partial_state.pt에서 new_embed/new_lm_head만 복원.
+      optimizer/scheduler는 Trainer 내부 로직이 자동 처리.
 
     Attributes:
-        _new_token_ids: 새 커스텀 토큰 ID 리스트. _save_checkpoint에서 재적용에 사용.
+        _new_token_ids: 새 커스텀 토큰 ID 리스트. partial_state.pt 저장에 사용.
     """
 
     def __init__(self, *args, new_token_ids: list[int], **kwargs):
@@ -44,8 +46,7 @@ class PreStageTrainer(Trainer):
 
         Args:
             *args: Trainer에 전달될 위치 인자.
-            new_token_ids: 새 커스텀 토큰 ID 리스트.
-                체크포인트 저장 후 PartialEmbedding 재적용에 사용.
+            new_token_ids: 새 커스텀 토큰 ID 리스트. partial_state.pt 저장에 사용.
             **kwargs: Trainer에 전달될 키워드 인자.
         """
         self._new_token_ids = new_token_ids
@@ -66,13 +67,21 @@ class PreStageTrainer(Trainer):
             _trainer_module.validate_quantization_for_training = _orig_validate
 
     def _save_checkpoint(self, model, trial, metrics=None):
-        """체크포인트 저장: PartialEmbedding 병합 → HF 표준 저장 → 재적용.
+        """체크포인트 저장: partial_state.pt + optimizer/scheduler/trainer_state.
 
         저장 흐름:
-        1. partial_state.pt 저장 (merge 전 현재 훈련 가중치 보존)
-        2. merge_and_restore: PartialEmbedding → nn.Embedding (HF 표준 형식)
-        3. super()._save_checkpoint: 표준 모델 + optimizer + scheduler + trainer_state 저장
-        4. _setup_partial_training: 훈련 계속을 위해 PartialEmbedding 재적용
+        1. partial_state.pt 저장 (현재 훈련된 new_embed/new_lm_head 값)
+        2. super()._save_checkpoint: optimizer + scheduler + trainer_state 저장
+           (model.safetensors는 저장 안 함 → optimizer Parameter 참조 유지)
+
+        Mod Record: 기존에는 merge_and_restore() → super() → _setup_partial_training() 순서로
+        실행했다. 이 방식의 문제: merge_and_restore가 nn.Parameter 객체를 소멸시키고
+        _setup_partial_training이 새 객체를 생성하면서 optimizer의 Parameter 참조가 끊어진다.
+        이후 optimizer.step()이 소멸된 객체를 업데이트하려 해도 grad=None이므로 no-op이 되어
+        체크포인트 저장 이후의 훈련이 완전히 무효가 되는 버그가 있었다.
+        수정: merge_and_restore/_setup_partial_training을 중간 체크포인트에서 제거.
+        model.safetensors는 저장하지 않고 partial_state.pt만으로 resume을 지원한다.
+        merge_and_restore는 최종 저장(run_pre_stage.py)에서만 호출한다.
 
         Args:
             model: 현재 훈련 중인 모델 (PartialEmbedding/PartialLMHead 적용 상태).
@@ -85,7 +94,7 @@ class PreStageTrainer(Trainer):
         output_dir = os.path.join(run_dir, checkpoint_folder)
         os.makedirs(output_dir, exist_ok=True)
 
-        # 2. partial_state.pt 저장: merge 전에 실행해야 현재 훈련된 new_embed 값 보존
+        # 2. partial_state.pt 저장: 현재 훈련된 new_embed/new_lm_head 값 보존
         embed = model.model.embed_tokens
         lm_head = model.lm_head
         if isinstance(embed, PartialEmbedding) and isinstance(lm_head, PartialLMHead):
@@ -99,31 +108,24 @@ class PreStageTrainer(Trainer):
             )
             logger.info(f"partial_state.pt 저장 완료: {output_dir}")
 
-        # 3. PartialEmbedding/PartialLMHead → 표준 HF 형식으로 병합
-        # super()._save_checkpoint가 model.save_pretrained()를 호출하므로
-        # 반드시 표준 형식(nn.Embedding, nn.Linear)으로 복원한 뒤 호출해야 함
-        merge_and_restore(model)
+        # 3. optimizer/scheduler/trainer_state 저장 (model.safetensors는 저장 안 함)
+        # self.save_model을 일시 no-op으로 교체하여 모델 가중치 저장만 건너뜀
+        # transformer 레이어는 항상 HuggingFace에서 새로 로드하므로 저장 불필요
+        _orig_save_model = self.save_model
+        self.save_model = lambda *args, **kwargs: None
+        try:
+            super()._save_checkpoint(model, trial)
+        finally:
+            self.save_model = _orig_save_model
 
-        # 4. super(): 병합된 표준 모델 + optimizer + scheduler + trainer_state 저장
-        # optimizer.pt에는 new_embed, new_lm_head에 대한 AdamW state (m, v) 포함
-        # Resume 시 _setup_partial_training 후 동일한 shape의 파라미터로 정상 로드 가능
-        # Mod Record: transformers 버전업으로 _save_checkpoint에서 metrics 인자 제거됨.
-        # Trainer가 내부적으로 metric을 자체 관리하도록 리팩토링되어 넘기지 않아도 됨.
-        super()._save_checkpoint(model, trial)
-
-        # 5. 훈련 계속을 위해 PartialEmbedding/PartialLMHead 재적용
-        # merge된 embed_tokens.weight에 새 토큰 훈련값이 포함되어 있으므로
-        # _setup_partial_training이 자동으로 올바른 초기값으로 new_embed를 생성함
-        _setup_partial_training(model, self._new_token_ids)
-        logger.info("체크포인트 저장 완료, PartialEmbedding/PartialLMHead 재적용")
+        logger.info("체크포인트 저장 완료 (partial_state.pt + optimizer/scheduler/trainer_state)")
 
     def _load_from_checkpoint(self, resume_from_checkpoint: str, model=None):
-        """체크포인트에서 모델 복원.
+        """체크포인트에서 new_embed/new_lm_head 복원.
 
-        Trainer 기본 구현은 state_dict key mismatch로 PartialEmbedding의
-        new_embed/new_lm_head를 로드하지 못한다 (체크포인트는 merge 후 표준 HF 형식).
-        super() 호출로 transformer 레이어 quantized 가중치를 복원한 뒤,
-        partial_state.pt에서 new_embed/new_lm_head를 직접 복원한다.
+        중간 체크포인트에는 model.safetensors가 없으므로 super()를 호출하지 않는다.
+        transformer 레이어는 load_model_and_tokenizer()에서 HuggingFace로부터 이미 로드됨.
+        optimizer/scheduler는 Trainer 내부 _load_optimizer_and_scheduler()가 자동 처리.
 
         Args:
             resume_from_checkpoint: 체크포인트 디렉토리 경로.
@@ -132,18 +134,11 @@ class PreStageTrainer(Trainer):
         Raises:
             없음. partial_state.pt 부재 시 경고 후 계속.
         """
-        # 1. Trainer 기본: transformer 레이어 quantized 가중치 복원
-        #    (embed_tokens/lm_head는 key mismatch로 스킵 → missing keys 경고는 정상)
-        super()._load_from_checkpoint(resume_from_checkpoint, model)
-
-        # 2. partial_state.pt에서 new_embed/new_lm_head 복원
-        # Mod Record: Trainer 기본 _load_from_checkpoint는 PartialEmbedding key를 로드
-        # 못해 trained embed 값이 초기화 상태로 재시작되는 버그 발생. partial_state.pt로 직접 복원.
         partial_state_path = Path(resume_from_checkpoint) / "partial_state.pt"
         if not partial_state_path.exists():
             logger.warning(
                 f"partial_state.pt 없음: {partial_state_path} — new_embed/new_lm_head가 "
-                "초기값으로 유지됩니다. 첫 체크포인트라면 정상입니다."
+                "초기값으로 유지됩니다."
             )
             return
 

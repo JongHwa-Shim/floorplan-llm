@@ -592,25 +592,23 @@ PEFT 어댑터(LoRA/DoRA)는 이 단계에서 사용하지 않는다.
 ```
 data/models/{model.name}/checkpoints/pre_stage/
 └── checkpoint-{step}/
-    ├── model.safetensors     ← merge_and_restore 후 표준 HF 형식 저장
-    ├── partial_state.pt      ← new_embed / new_lm_head 가중치만 별도 저장
+    ├── partial_state.pt      ← new_embed / new_lm_head 가중치만 별도 저장 (model.safetensors 없음)
     ├── optimizer.pt          ← AdamW state (new_embed, new_lm_head 두 파라미터만, ~16MB)
     └── trainer_state.json    ← step, epoch, best_model_checkpoint 등
 ```
 
+> **model.safetensors를 저장하지 않는 이유:** Transformer 레이어는 항상 HuggingFace에서 새로 로드하므로 저장할 필요가 없다. 기존 방식(중간 체크포인트에서 `merge_and_restore()` 호출)은 `PartialEmbedding`의 `nn.Parameter` 객체를 소멸시키고 `_setup_partial_training()`이 새 객체를 생성하면서 optimizer의 Parameter 참조가 끊어지는 버그가 있었다. 이후 `optimizer.step()`이 소멸된 객체를 업데이트하려 해도 `grad=None`이므로 no-op이 되어 체크포인트 저장 이후의 훈련이 완전히 무효가 된다. `merge_and_restore`는 최종 저장(`run_pre_stage.py`)에서만 호출한다.
+
 체크포인트 저장 흐름:
-1. `partial_state.pt` 저장 — merge 전 훈련된 new_embed/new_lm_head 보존
-2. `merge_and_restore()` — 표준 HF 형식으로 통합
-3. `super()._save_checkpoint()` — 표준 모델 + optimizer + trainer_state 저장
-4. `_setup_partial_training()` 재적용 — 훈련 계속을 위해 PartialEmbedding 복원
+1. `partial_state.pt` 저장 — 현재 훈련된 new_embed/new_lm_head 값 보존
+2. `self.save_model`을 일시 no-op으로 교체 후 `super()._save_checkpoint()` 호출 → optimizer + trainer_state만 저장 (model.safetensors 건너뜀)
 
 **Resume 로드 흐름:**
-- HF 표준 체크포인트에서 모델 로드 (merge된 embed_tokens.weight 포함)
-- `_setup_partial_training()` — 병합된 가중치에서 new_embed 자동 초기화
+- 항상 HuggingFace에서 기본 모델을 새로 로드 (`load_model_and_tokenizer`)
+- `_setup_partial_training()` — PartialEmbedding/PartialLMHead 구조 적용
 - `trainer.train(resume_from_checkpoint=...)` → `_load_from_checkpoint` 오버라이드 호출
-  1. `super()._load_from_checkpoint()` — transformer 레이어 quantized 가중치 복원 (key mismatch로 embed_tokens/lm_head는 스킵, missing keys 경고는 정상)
-  2. `partial_state.pt` 로드 — new_embed/new_lm_head를 훈련된 값으로 직접 복원
-- optimizer.pt에서 AdamW state / step 복원
+  1. `partial_state.pt` 로드 — new_embed/new_lm_head를 훈련된 값으로 직접 복원 (`super()` 호출 없음 — 중간 체크포인트에 `model.safetensors` 없음)
+- optimizer.pt에서 AdamW state / step 복원 (Trainer 내부 `_load_optimizer_and_scheduler`가 자동 처리)
 
 **`_load_best_model` 오버라이드:**
 `load_best_model_at_end=true` 시 표준 모델 재로드 대신 `partial_state.pt`에서 new_embed/new_lm_head만 직접 복사한다 (key mismatch 방지).
@@ -666,6 +664,7 @@ You are a floor plan generator. Given room conditions, generate complete floorpl
 | `config/training/pre_stage/pipeline.yaml` | 모델, 양자화, 데이터, 훈련 하이퍼파라미터, resume 설정 |
 | `config/training/augmentation/pre_stage.yaml` | Pre-Stage용 증강 파라미터 (Hydra config group, `cfg.augmentation`으로 병합) |
 | `tests/training/pre_stage/validate_resume.py` | Resume 체크포인트 검증 스크립트 (partial_state.pt 존재/형태/복원 확인) |
+| `tests/training/pre_stage/validate_save_and_load.py` | 저장/로드 후 optimizer 업데이트 정상 동작 검증 (체크포인트 저장 후 훈련이 계속 진행되는지 2-case 검증) |
 
 ### 체크포인트 및 출력
 
@@ -676,8 +675,7 @@ outputs/training/pre_stage/
 data/models/{model.name}/
 └── checkpoints/pre_stage/
     ├── checkpoint-{step}/      # 에폭별 자동 저장 (save_total_limit 초과 시 오래된 것 삭제)
-    │   ├── model.safetensors   # 표준 HF 형식 (merge 후)
-    │   ├── partial_state.pt    # new_embed / new_lm_head 가중치
+    │   ├── partial_state.pt    # new_embed / new_lm_head 가중치 (model.safetensors 없음)
     │   ├── optimizer.pt        # AdamW state (~16MB)
     │   └── trainer_state.json
     └── final/                  # 최종 병합 모델 (tokenizer 포함, 표준 HuggingFace 형식)
