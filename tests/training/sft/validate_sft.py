@@ -655,6 +655,33 @@ def phase3_checkpoint_and_resume(output_dir: str, model_dir: str | None) -> bool
     else:
         logger.warning(f"[WARN] trainer_state.json 없음: {trainer_state_path}")
 
+    # ── Case 3c: merge_dora_and_save 최종 병합 저장 검증 ─────────────────────
+    # run_sft.py의 마지막 단계를 검증한다.
+    # validate_sft.py 초기 구현에서 누락됐던 항목:
+    # Phase 3a/3b는 adapter 체크포인트 저장(Trainer 자동)만 검증하고
+    # merge_and_unload() → save_pretrained() 경로를 실행하지 않아
+    # 실제 run_sft.py 실행 시에야 NotImplementedError가 발견됨.
+    logger.info("[Case 3c] merge_dora_and_save 최종 병합 저장 검증...")
+    from src.training.sft.model_loader import merge_dora_and_save
+
+    final_save_dir = Path(output_dir) / "final"
+    try:
+        merge_dora_and_save(model_3b, tokenizer_3b, final_save_dir)
+    except Exception as e:
+        logger.error(f"[FAIL] merge_dora_and_save 실패: {e}")
+        passed = False
+        return passed
+
+    # 저장된 파일 존재 확인
+    required_final_files = ["model.safetensors", "config.json", "tokenizer.json"]
+    for fname in required_final_files:
+        fpath = final_save_dir / fname
+        if fpath.exists():
+            logger.info(f"[PASS] final/{fname} 존재")
+        else:
+            logger.error(f"[FAIL] final/{fname} 없음: {fpath}")
+            passed = False
+
     return passed
 
 

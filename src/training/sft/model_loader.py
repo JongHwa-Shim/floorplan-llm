@@ -116,8 +116,25 @@ def merge_dora_and_save(
     logger.info("DoRA adapter를 base model에 병합 중 (merge_and_unload)...")
     merged_model = model.merge_and_unload()
 
-    logger.info(f"병합된 모델 저장 중: {save_dir}")
-    merged_model.save_pretrained(str(save_dir))
+    # Mod Record: transformers 4.51+에서 4bit 양자화 모델에 merge_and_unload() 후
+    # save_pretrained()를 호출하면 revert_weight_conversion()이 4bit 역변환을 시도하는데,
+    # 해당 역변환(reverse_op)이 미구현 상태라 NotImplementedError가 발생한다.
+    # merge_and_unload 이후에도 transformer 레이어는 여전히 NF4 4bit 상태이며,
+    # revert_weight_conversion은 이를 원래 dtype으로 복원하려 하지만 실패함.
+    # pre_stage의 validate_quantization_for_training 패치와 동일한 방식으로
+    # modeling_utils 네임스페이스의 함수를 일시 no-op으로 교체하여 우회한다.
+    import transformers.modeling_utils as _modeling_module
+
+    _orig_revert = getattr(_modeling_module, "revert_weight_conversion", None)
+    if _orig_revert is not None:
+        _modeling_module.revert_weight_conversion = lambda m, sd: sd
+    try:
+        logger.info(f"병합된 모델 저장 중: {save_dir}")
+        merged_model.save_pretrained(str(save_dir))
+    finally:
+        if _orig_revert is not None:
+            _modeling_module.revert_weight_conversion = _orig_revert
+
     tokenizer.save_pretrained(str(save_dir))
     logger.info("모델 및 토크나이저 저장 완료")
 
