@@ -20,8 +20,8 @@ quantization:
 # DoRA(Weight-Decomposed Low-Rank Adaptation) 설정
 # LoraConfig(use_dora=True)로 활성화되며, PEFT >= 0.9 필요
 dora:
-  r: 16
-  lora_alpha: 32
+  r: 32
+  lora_alpha: 64
   lora_dropout: 0.05
   # Qwen2.5 attention + MLP 전 레이어 대상
   target_modules:
@@ -50,7 +50,7 @@ training:
   per_device_train_batch_size: 1
   per_device_eval_batch_size: 2
   gradient_accumulation_steps: 4      # 실효 배치 크기 4
-  learning_rate: 2.0e-5               # pre_stage(5e-4) 대비 2 order 낮게 설정
+  learning_rate: 2.0e-4               # QLoRA 및 QDoRA는 full fine-tuning보다 높은 LR 사용 권장
   lr_scheduler_type: "cosine"
   warmup_ratio: 0.03
   weight_decay: 0.01
