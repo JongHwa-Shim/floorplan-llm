@@ -1,0 +1,68 @@
+# SFT(Supervised Fine-Tuning) 훈련 파이프라인 설정
+# Pre-Stage에서 워밍업된 모델을 입력으로 DoRA를 적용한 전체 레이어 fine-tuning.
+# 모델 로드 경로: HF Hub 대신 로컬 pre_stage/final 경로 사용.
+
+model:
+  user: "Qwen"
+  name: "Qwen2.5-Coder-7B"
+  # HF Hub 대신 pre_stage 최종 병합 모델을 로컬에서 로드
+  # merge_and_restore()로 커스텀 토큰 가중치가 병합된 상태
+  model_dir: "data/models/${model.name}/checkpoints/pre_stage/final"
+  tokenizer_dir: "${model.model_dir}"
+  vocab_extension: "data/models/${model.name}/tokenization/vocab_extension.json"
+
+quantization:
+  load_in_4bit: true
+  bnb_4bit_compute_dtype: "bfloat16"
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_use_double_quant: false
+
+# DoRA(Weight-Decomposed Low-Rank Adaptation) 설정
+# LoraConfig(use_dora=True)로 활성화되며, PEFT >= 0.9 필요
+dora:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  # Qwen2.5 attention + MLP 전 레이어 대상
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+  bias: "none"
+
+data:
+  arrow_dir: "data/dataset/processed_dataset/rplan/arrow"
+  max_length: 4096
+  aug_pipeline_config: "config/training/augmentation/sft.yaml"
+
+resume:
+  enabled: false
+  checkpoint_path: null
+  auto_find_latest: true
+
+training:
+  output_dir: "data/models/${model.name}/checkpoints/sft"
+  num_train_epochs: 3
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 2
+  gradient_accumulation_steps: 4      # 실효 배치 크기 4
+  learning_rate: 2.0e-5               # pre_stage(5e-4) 대비 2 order 낮게 설정
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.03
+  weight_decay: 0.01
+  bf16: true
+  dataloader_num_workers: 4
+  save_strategy: "epoch"
+  eval_strategy: "epoch"
+  logging_steps: 10
+  report_to: "wandb"
+  project_name: "floorplan-llm"
+  run_name: "floorplan-sft"
+  seed: 42
+  save_total_limit: 3
+  load_best_model_at_end: true
+  max_steps: 0                        # 0 = 전체 epoch 기반 학습

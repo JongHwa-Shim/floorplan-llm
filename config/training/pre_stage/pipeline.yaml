@@ -41,7 +41,7 @@ training:
   gradient_accumulation_steps: 1
   # Pre-Stage는 새 토큰 embedding 워밍업이므로 공격적인 LR 사용
   learning_rate: 5.0e-4
-  lr_scheduler_type: "cosine"
+  lr_scheduler_type: "cosine" # cosine | linear | polynomial | constant | constant_with_warmup | cosine_with_min_lr
   warmup_ratio: 0.05
   weight_decay: 0.0
   # 혼합 정밀도 (AMP): forward/backward bf16, optimizer state fp32
