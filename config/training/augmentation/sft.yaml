@@ -1,0 +1,40 @@
+# SFT 훈련용 rplan 데이터 증강 설정
+# group: training/augmentation → cfg.augmentation 으로 병합됨
+# 파일 내부에 augmentation: 래퍼 없이 내용만 작성해야 이중 중첩을 피할 수 있음
+
+shuffle:
+  rid: true
+  vertex_order: true
+  room_order: true
+  edge_order: true
+  spatial_order: true
+  reverse_spatial: true
+
+transform:
+  translate: true
+  flip: true
+  scale_aspect: true
+  scale_aspect_min: 0.7
+  scale_aspect_max: 1.3
+  zoom: true
+  zoom_min: 0.7
+  zoom_max: 1.3
+
+noise:
+  p_noise: 0.50
+  noise_sigma: 3.0
+
+drop:
+  p_drop_block: 0.5
+  p_drop_type: 0.20
+  p_drop_coords: 0.20
+  p_drop_edge: 0.5
+  p_drop_pair: 0.20
+  p_drop_door: 0.20
+  p_drop_spatial: 0.8
+  p_drop_front_door: 0.50
+  p_drop_front_door_coords: 0.40
+
+room_summary:
+  p_drop_total: 0.50
+  p_drop_type: 0.60
