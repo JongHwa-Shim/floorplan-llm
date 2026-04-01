@@ -16,7 +16,7 @@
 8. [Step 3: JSONL → Arrow 변환](#8-step-3-jsonl--arrow-변환)
 9. [Step 4: 데이터 증강 + 토크나이징](#9-step-4-데이터-증강--토크나이징)
 10. [Pre-Stage: 새 토큰 Embedding 워밍업](#10-pre-stage-새-토큰-embedding-워밍업)
-11. [Step 5: LLM 학습 (구현 예정)](#11-step-5-llm-학습-구현-예정)
+11. [Step 5: LLM 학습](#11-step-5-llm-학습)
 12. [Step 6: 추론 및 시각화 (구현 예정)](#12-step-6-추론-및-시각화-구현-예정)
 
 ---
@@ -299,7 +299,8 @@ Chat template으로 구성된 전체 시퀀스에서 **system + user 턴(입력)
 | 3 | Arrow 변환 | JSONL | Arrow DatasetDict (train/val/test) |
 | 4 | 증강 + 토크나이징 | Arrow + 증강 설정 | (condition_tokens, output_tokens) |
 | Pre-Stage | 새 토큰 Embedding 워밍업 | 토큰 시퀀스 배치 | 워밍업된 embed_tokens + lm_head |
-| 5 | LLM 학습 (예정) | 토큰 시퀀스 배치 | Fine-tuned 모델 |
+| SFT | DoRA Fine-tuning | pre_stage/final + 토큰 시퀀스 배치 | DoRA 병합된 Fine-tuned 모델 |
+| 5 | DPO → GRPO (예정) | 토큰 시퀀스 배치 | Fine-tuned 모델 |
 | 6 | 추론 + 시각화 (예정) | 조건 텍스트 | 평면도 이미지 |
 
 ---
@@ -619,8 +620,8 @@ data/models/{model.name}/checkpoints/pre_stage/
 
 ```
 config/training/augmentation/
-├── pre_stage.yaml    ← Pre-Stage용 (현재)
-├── sft.yaml          ← SFT용 (추후)
+├── pre_stage.yaml    ← Pre-Stage용 (완료)
+├── sft.yaml          ← SFT용 (완료, pre_stage.yaml과 동일한 증강 전략)
 └── dpo.yaml          ← DPO용 (추후)
 ```
 
@@ -683,37 +684,115 @@ data/models/{model.name}/
 
 ---
 
-## 11. Step 5: LLM 학습 (구현 예정)
-
-### 베이스 모델
-
-Pre-Stage에서 워밍업된 모델을 기반으로 평면도 생성 태스크에 Fine-tuning 한다. 기본 후보 모델은 `Qwen/Qwen2.5-Coder-7B`이나, config의 `model.user`와 `model.name`으로 변경 가능하다.
+## 11. Step 5: LLM 학습
 
 ### 3-Stage Fine-tuning 전략
 
-LLM 학습 시 QDoRA(Quantized DoRA)를 사용한다. 혼합 정밀도(bf16 AMP)를 적용하며, lm_head는 양자화하지 않는다.
+Pre-Stage에서 워밍업된 모델(`pre_stage/final`)을 기반으로 3단계 fine-tuning을 수행한다. LLM 학습 시 QDoRA(Quantized DoRA)를 사용한다. 혼합 정밀도(bf16 AMP)를 적용한다.
 
-#### Stage 1: SFT (Supervised Fine-tuning)
+### Stage 1: SFT (Supervised Fine-tuning) — 완료
+
+#### 목적
+
+Pre-Stage 워밍업 이후, DoRA(Weight-Decomposed Low-Rank Adaptation)를 통해 Transformer 전체 레이어를 fine-tuning하여 모델이 평면도 생성 태스크에 적응하도록 한다.
+
+#### Pre-Stage와의 차이점
+
+| 항목 | Pre-Stage | SFT |
+|------|-----------|-----|
+| 모델 로드 출처 | HF Hub | 로컬 `pre_stage/final` 경로 |
+| 훈련 범위 | new_embed/lm_head 행 567개 | DoRA adapter (attention/MLP 전 레이어) |
+| 특수 모듈 | PartialEmbedding / PartialLMHead | 불필요 (가중치 이미 병합됨) |
+| resize_token_embeddings | 필요 | 불필요 (vocab_size 이미 확장됨) |
+| 체크포인트 포맷 | `partial_state.pt` (커스텀) | `adapter_model.safetensors` (표준 PEFT) |
+| Resume 처리 | 커스텀 `_load_from_checkpoint` | 표준 PEFT Resume |
+
+#### DoRA (Weight-Decomposed Low-Rank Adaptation)
+
+`LoraConfig(use_dora=True)`로 활성화. 일반 LoRA에서 weight를 magnitude(크기)와 direction(방향)으로 분리하여 **direction만 low-rank로 학습**한다. 이로 인해 일반 LoRA 대비 full fine-tuning에 가까운 학습 품질을 제공하면서도 파라미터 수는 최소화된다.
 
 | 설정 | 값 |
 |------|---|
-| Unfreeze 대상 | DoRA 파라미터 + 새 토큰 embedding + lm_head의 새 토큰 행 |
-| LR (Pretrained 파라미터) | 1e-5 |
-| LR (새 Embedding) | 2e-4 |
-| Warmup | 전체 학습의 5~10% |
-| 목적 | 전체 모델이 평면도 생성 태스크에 적응 |
+| Train 대상 | DoRA adapter (lora_A, lora_B, lora_magnitude_vector) |
+| Target modules | q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj |
+| rank (r) | 32 |
+| lora_alpha | 64 (실효 스케일 = alpha/r = 2.0) |
+| lora_dropout | 0.05 |
+| 학습률 | 2e-4 |
+| Warmup ratio | 0.03 |
+| Weight decay | 0.01 |
+| 양자화 | 4bit NF4 |
 
-증강된 condition/output 쌍으로 지도 학습. Chat template을 활용하여 user 턴(조건)과 assistant 턴(평면도 출력)으로 구성. DoRA 적용 대상은 config에서 선택 가능하도록 구성 필요. 훈련 후 DoRA 파라미터를 merge하는 기능 필요.
+**DoRA 파라미터 수 계산 (Qwen2.5-Coder-7B 기준):**
+- 28 Transformer 레이어 × 7 target_modules × 3 텐서(lora_A, lora_B, lora_magnitude_vector) = 588개 파라미터 텐서
+- scalar 훈련 가능 파라미터: 약 41,760,768개 (~42M)
 
-#### Stage 2: DPO (Direct Preference Optimization)
+#### 모델 로드 흐름
+
+```
+1. AutoTokenizer.from_pretrained(pre_stage/final)
+   → tokenizer.json에서 커스텀 토큰 567개 포함 vocab 로드
+
+2. AutoModelForCausalLM.from_pretrained(
+       pre_stage/final,   # 로컬 경로 (인터넷 연결 불필요)
+       quantization_config,  # 4bit NF4
+       device_map="auto",
+       dtype=torch.bfloat16,
+   )
+   → model.safetensors에서 전체 가중치 로드 (커스텀 토큰 이미 포함)
+   → resize_token_embeddings() 호출 불필요
+
+3. prepare_model_for_kbit_training(model, ...)
+   → gradient checkpointing 활성화
+
+4. LoraConfig(..., use_dora=True)
+5. get_peft_model(model, lora_config)
+   → attention/MLP 레이어에 DoRA adapter 주입
+```
+
+#### merge_dora_and_save
+
+훈련 완료 후 DoRA adapter를 base model에 병합하여 표준 HuggingFace 형식으로 저장한다.
+
+`model.merge_and_unload()` 이후 `save_pretrained()` 호출 시, transformers 4.51+에서 `revert_weight_conversion()`이 NF4 역변환을 시도하다 `NotImplementedError`를 발생시키는 버그가 있다. 이를 `transformers.modeling_utils.revert_weight_conversion`을 일시적으로 no-op으로 패치하여 우회한다 (Pre-Stage의 `validate_quantization_for_training` 패치와 동일한 방식).
+
+#### 체크포인트 구조
+
+```
+data/models/{model.name}/checkpoints/sft/
+├── checkpoint-{step}/
+│   ├── adapter_model.safetensors  # DoRA adapter 가중치
+│   ├── adapter_config.json        # use_dora: true 포함
+│   ├── optimizer.pt               # AdamW state
+│   └── trainer_state.json
+└── final/                         # merge_and_unload 후 완전한 모델
+    ├── model.safetensors          # DoRA 병합된 전체 가중치
+    ├── tokenizer.json
+    └── config.json
+```
+
+#### 주요 모듈
+
+| 파일 | 역할 |
+|------|------|
+| `src/training/sft/model_loader.py` | 로컬 pre_stage/final 로드 + DoRA 적용 + `merge_dora_and_save` |
+| `src/training/sft/trainer.py` | `TrainingArguments` + 표준 `Trainer` 빌드 (패치 불필요) |
+| `scripts/training/run_sft.py` | Hydra 진입점, seed 고정, Resume 분기, 훈련 후 `merge_dora_and_save` 호출 |
+| `config/training/sft/pipeline.yaml` | DoRA, 학습률, model_dir 등 SFT 전체 설정 |
+| `config/training/augmentation/sft.yaml` | SFT용 증강 파라미터 (pre_stage.yaml과 동일) |
+| `tests/training/sft/validate_sft.py` | 로드·DoRA구조·훈련·저장·Resume 통합 검증 |
+
+---
+
+### Stage 2: DPO (Direct Preference Optimization) — 구현 예정
 
 선호/비선호 쌍(preferred/rejected)을 활용하여 생성 품질을 개선한다. 기하학적 제약(방 겹침, 경계 초과 등)을 위반하는 출력을 rejected 샘플로 구성.
 
-#### Stage 3: GRPO (Group Relative Policy Optimization)
+### Stage 3: GRPO (Group Relative Policy Optimization) — 구현 예정
 
 RLVR 기반 강화학습으로 규칙 기반 보상 함수를 적용한다. 방 블록 간 겹침 없음, 좌표 경계 준수, 사용자 조건 부합도 등을 보상으로 사용하여 생성 정밀도를 극대화한다.
 
-### 학습 데이터 구성
+### 학습 데이터 구성 (공통)
 
 - **입력:** condition_tokens (삭제 증강이 적용된 부분 정보)
 - **출력:** output_tokens (모든 방 + 모든 Edge의 완전한 정보)

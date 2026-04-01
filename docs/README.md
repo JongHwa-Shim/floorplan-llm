@@ -38,11 +38,14 @@ floorplan-llm/
 │   └── training/
 │       ├── augmentation/           # 데이터 증강 프리셋 (Hydra config group)
 │       │   ├── pre_stage.yaml      # Pre-Stage용 증강 설정 → cfg.augmentation으로 병합
+│       │   ├── sft.yaml            # SFT용 증강 설정 → cfg.augmentation으로 병합
 │       │   └── validate_augmentation/  # validate_augmentation.py 실행 설정
 │       │       ├── pipeline.yaml       # 스크립트 전반 설정 (model, data, validate)
 │       │       └── augmentation.yaml   # 검증에 사용할 증강 파라미터
-│       └── pre_stage/              # Pre-Stage 훈련 설정
-│           └── pipeline.yaml       # defaults로 training/augmentation: pre_stage 합성
+│       ├── pre_stage/              # Pre-Stage 훈련 설정
+│       │   └── pipeline.yaml       # defaults로 training/augmentation: pre_stage 합성
+│       └── sft/                    # SFT 훈련 설정
+│           └── pipeline.yaml       # DoRA, 학습률, model_dir (pre_stage/final) 등
 │
 ├── src/                            # 핵심 모듈 (uv 패키지로 설치)
 │   ├── build_dataset/
@@ -71,11 +74,14 @@ floorplan-llm/
 │       │   ├── strategies.py       # 15+ 증강 전략 구현
 │       │   ├── tokenizer.py        # 조건/정답 토큰 시퀀스 생성
 │       │   └── decoder.py          # 토큰 → 텍스트 디코딩
-│       └── pre_stage/              # Pre-Stage 훈련 모듈
-│           ├── model_loader.py     # 4bit 양자화 로드 + PartialEmbedding/PartialLMHead
-│           ├── dataset.py          # Arrow 로드 + 증강 + Chat Template
-│           ├── collator.py         # Dynamic padding + label 마스킹
-│           └── trainer.py          # TrainingArguments + Trainer 빌드
+│       ├── pre_stage/              # Pre-Stage 훈련 모듈
+│       │   ├── model_loader.py     # 4bit 양자화 로드 + PartialEmbedding/PartialLMHead
+│       │   ├── dataset.py          # Arrow 로드 + 증강 + Chat Template
+│       │   ├── collator.py         # Dynamic padding + label 마스킹
+│       │   └── trainer.py          # TrainingArguments + Trainer 빌드
+│       └── sft/                    # SFT 훈련 모듈
+│           ├── model_loader.py     # 로컬 pre_stage/final 로드 + DoRA 적용 + merge_dora_and_save
+│           └── trainer.py          # TrainingArguments + 표준 Trainer 빌드
 │
 ├── scripts/                        # CLI 실행 진입점
 │   ├── build_dataset/
@@ -89,7 +95,8 @@ floorplan-llm/
 │   └── training/
 │       ├── augmentation/
 │       │   └── validate_augmentation.py # 증강 결과 검증
-│       └── run_pre_stage.py        # Pre-Stage 훈련 실행
+│       ├── run_pre_stage.py        # Pre-Stage 훈련 실행
+│       └── run_sft.py              # SFT 훈련 실행 (DoRA + pre_stage/final 로드)
 │
 ├── tests/                          # 검증 및 시각화 스크립트 (핵심 파이프라인 외)
 │   ├── build_dataset/
@@ -97,9 +104,11 @@ floorplan-llm/
 │   │       ├── validate_jsonl.py   # JSONL 스키마 무결성 검증
 │   │       └── visualize_jsonl.py  # 평면도 JSONL 시각화
 │   └── training/
-│       └── pre_stage/
-│           ├── validate_resume.py          # Resume 체크포인트 복원 검증
-│           └── validate_save_and_load.py   # 저장/로드 후 optimizer 업데이트 정상 동작 검증
+│       ├── pre_stage/
+│       │   ├── validate_resume.py          # Resume 체크포인트 복원 검증
+│       │   └── validate_save_and_load.py   # 저장/로드 후 optimizer 업데이트 정상 동작 검증
+│       └── sft/
+│           └── validate_sft.py             # SFT 통합 검증 (로드·DoRA구조·훈련·저장·Resume)
 │
 ├── data/                           # 데이터 저장소 (Git 추적 제외)
 │   ├── dataset/
@@ -112,9 +121,12 @@ floorplan-llm/
 │       └── {model.name}/                       # 모델명별 독립 저장 (예: Qwen2.5-Coder-7B)
 │           ├── tokenization/                   # 확장된 토크나이저 + vocab
 │           └── checkpoints/
-│               └── pre_stage/                  # Pre-Stage 체크포인트 + 최종 모델
-│                   ├── checkpoint-*/           # 에폭별 자동 저장 체크포인트
-│                   └── final/                  # 최종 병합 모델 (다음 Stage 입력)
+│               ├── pre_stage/                  # Pre-Stage 체크포인트 + 최종 모델
+│               │   ├── checkpoint-*/           # 에폭별 자동 저장 체크포인트
+│               │   └── final/                  # 최종 병합 모델 (SFT 입력)
+│               └── sft/                        # SFT 체크포인트 + 최종 모델
+│                   ├── checkpoint-*/           # 에폭별 자동 저장 (adapter_model.safetensors)
+│                   └── final/                  # DoRA 병합된 최종 모델 (다음 Stage 입력)
 │
 ├── outputs/                        # Hydra 실행 로그 + 설정 스냅샷
 │   └── training/
@@ -197,13 +209,16 @@ PNG (RPLAN 데이터셋)
 [Pre-Stage] 새 토큰 Embedding 워밍업 → 커스텀 토큰 embedding 안착
         │
         ▼
-[Step 5] LLM 학습 (구현 예정) → 평면도 생성 모델
+[SFT] DoRA Fine-tuning         → attention/MLP 전 레이어 학습
+        │
+        ▼
+[Step 5] DPO → GRPO (구현 예정) → 평면도 생성 모델
         │
         ▼
 [Step 6] 추론 + 시각화 (예정) → 평면도 이미지
 ```
 
-> **현재 구현 완료 범위:** Step 1 ~ Step 4, Pre-Stage
+> **현재 구현 완료 범위:** Step 1 ~ Step 4, Pre-Stage, SFT
 
 ---
 
@@ -352,6 +367,71 @@ uv run python scripts/training/run_pre_stage.py \
     resume.checkpoint_path=data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/checkpoint-500
 ```
 
+### SFT: DoRA Fine-tuning
+
+Pre-Stage에서 워밍업된 로컬 모델(`pre_stage/final`)에 DoRA를 적용하여 attention/MLP 전 레이어를 fine-tuning한다.
+
+```bash
+# 기본 실행
+uv run python scripts/training/run_sft.py
+
+# 디버그 (10 step만 실행, W&B 비활성화)
+uv run python scripts/training/run_sft.py \
+    training.max_steps=10 training.report_to=none
+
+# 하이퍼파라미터 오버라이드
+uv run python scripts/training/run_sft.py \
+    training.learning_rate=1e-4 dora.r=16
+
+# 계속 훈련: 최신 체크포인트 자동 탐색 후 재개
+uv run python scripts/training/run_sft.py \
+    resume.enabled=true
+
+# 계속 훈련: 특정 체크포인트 지정
+uv run python scripts/training/run_sft.py \
+    resume.enabled=true \
+    resume.checkpoint_path=data/models/Qwen2.5-Coder-7B/checkpoints/sft/checkpoint-500
+```
+
+**SFT 체크포인트 출력 구조:**
+```
+data/models/{model.name}/checkpoints/sft/
+├── checkpoint-{step}/          # 에폭별 자동 저장 (최대 save_total_limit개 보존)
+│   ├── adapter_model.safetensors  # DoRA adapter 가중치
+│   ├── adapter_config.json        # DoRA 설정 (use_dora: true)
+│   ├── optimizer.pt               # AdamW state
+│   └── trainer_state.json
+└── final/                      # DoRA 병합된 최종 모델 (표준 HuggingFace 형식)
+    ├── model.safetensors       # DoRA 병합된 전체 가중치
+    ├── tokenizer.json
+    └── config.json
+```
+
+---
+
+### SFT 검증: 통합 검증 스크립트
+
+pre_stage/final 가중치 로드, DoRA 구조, 훈련 중 파라미터 갱신, 저장/Resume을 4단계로 통합 검증한다.
+
+**검증 단계:**
+- **Phase 0:** 파일 존재 확인 (model.safetensors, config.json, tokenizer.json, vocab_extension.json)
+- **Phase 1:** 모델 로드 + vocab_size 일치 + 커스텀 토큰 확인 + DoRA 구조 확인 (lora_magnitude_vector 생성 여부, 7개 target_modules 전부 커버, base weight frozen)
+- **Phase 2:** N step 훈련 전후 lora_A/lora_B/lora_magnitude_vector 갱신 확인 + frozen 파라미터 불변 확인
+- **Phase 3a:** 체크포인트 저장 확인 (adapter_model.safetensors, use_dora:true, optimizer.pt)
+- **Phase 3b:** Resume 후 adapter 가중치 복원 + 추가 훈련 갱신 + global_step 연속성 확인
+
+```bash
+uv run python tests/training/sft/validate_sft.py
+
+# 특정 model_dir 지정
+uv run python tests/training/sft/validate_sft.py \
+    --model_dir data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/final
+```
+
+> 모든 Phase가 `[PASS]`가 출력되어야 정상.
+
+---
+
 ### Pre-Stage 검증: Resume 체크포인트 확인
 
 체크포인트의 `partial_state.pt`가 올바르게 저장되어 있는지, Resume 시 new_embed/new_lm_head 복원이 가능한지 확인한다.
@@ -432,10 +512,10 @@ model:
 | `validation.enabled` | `true` | 변환 후 검증 여부 |
 | `validation.num_samples` | `10` | 검증 샘플 수 |
 
-### `config/training/augmentation/pre_stage.yaml`
+### `config/training/augmentation/pre_stage.yaml` / `sft.yaml`
 
-훈련 단계별로 독립된 증강 프리셋을 관리한다. Hydra **config group** 방식으로 `config/training/pre_stage/pipeline.yaml`의 `defaults`에서 합성되어 `cfg.augmentation`으로 접근된다.
-추후 SFT, DPO, GRPO 등 각 단계별로 `sft.yaml`, `dpo.yaml` 등을 추가하여 독립 관리한다.
+훈련 단계별로 독립된 증강 프리셋을 관리한다. Hydra **config group** 방식으로 각 파이프라인 yaml에서 합성되어 `cfg.augmentation`으로 접근된다.
+현재 `pre_stage.yaml`과 `sft.yaml`이 동일한 증강 파라미터를 사용하며, 추후 DPO, GRPO 등 각 단계별로 독립 관리한다.
 
 | 파라미터 | 기본값 | 설명 |
 |---------|--------|------|
@@ -451,6 +531,21 @@ model:
 | `drop.p_drop_spatial` | `0.80` | Spatial 관계 삭제 확률 |
 | `room_summary.p_drop_total` | `0.50` | `<TOTAL>` + 숫자 쌍 삭제 확률 |
 | `room_summary.p_drop_type` | `0.60` | 개별 타입별 `<COUNT>` + 숫자 쌍 삭제 확률 |
+
+### `config/training/sft/pipeline.yaml`
+
+| 파라미터 | 기본값 | 설명 |
+|---------|--------|------|
+| `model.model_dir` | `data/models/${model.name}/checkpoints/pre_stage/final` | 로컬 pre_stage 최종 모델 경로 |
+| `dora.r` | `32` | DoRA rank (adapter 표현력) |
+| `dora.lora_alpha` | `64` | DoRA scaling factor (alpha/r=2, 실효 LR 스케일) |
+| `dora.lora_dropout` | `0.05` | adapter dropout |
+| `dora.target_modules` | `q/k/v/o_proj, gate/up/down_proj` | DoRA 적용 레이어 (attention + MLP 전부) |
+| `training.learning_rate` | `2e-4` | adapter 학습률 |
+| `training.num_train_epochs` | `3` | 훈련 에폭 수 |
+| `training.gradient_accumulation_steps` | `4` | 그래디언트 누적 (실효 배치 4) |
+| `training.max_steps` | `0` | 디버그용 step 제한 (0=비활성) |
+| `resume.enabled` | `false` | 계속 훈련 활성화 여부 |
 
 ### `config/training/pre_stage/pipeline.yaml`
 
@@ -543,7 +638,8 @@ You are a floor plan generator. Given room conditions, generate complete floorpl
 | Step 3 | JSONL → Arrow 변환 | ✅ 완료 |
 | Step 4 | 데이터 증강 + 토크나이징 | ✅ 완료 |
 | Pre-Stage | 새 토큰 Embedding 워밍업 훈련 | ✅ 완료 |
-| Step 5 | SFT → DPO → GRPO Fine-tuning | 🔜 구현 예정 |
+| SFT | DoRA Fine-tuning (attention/MLP 전 레이어) | ✅ 완료 |
+| Step 5 | DPO → GRPO Fine-tuning | 🔜 구현 예정 |
 | Step 6 | 추론 + 시각화 | 🔜 구현 예정 |
 
 자세한 설계 내용은 [Docs.md](Docs.md)를 참고.
