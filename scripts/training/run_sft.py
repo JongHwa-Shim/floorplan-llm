@@ -7,6 +7,9 @@ Pre-Stage에서 워밍업된 로컬 모델(pre_stage/final)에 DoRA를 적용하
     # 기본 실행 (config/training/sft/pipeline.yaml 사용)
     uv run python scripts/training/run_sft.py
 
+    # DDP 멀티 GPU (2개)
+    uv run torchrun --nproc_per_node=2 scripts/training/run_sft.py
+
     # 하이퍼파라미터 오버라이드
     uv run python scripts/training/run_sft.py training.learning_rate=1e-5
 
@@ -125,6 +128,16 @@ def main(cfg: DictConfig) -> None:
     """
     logger.info("=== SFT 훈련 시작 ===")
 
+    # DDP 재시작: distributed.nproc_per_node > 1이고 아직 torchrun 하위 프로세스가 아니면
+    # os.execvp로 현재 프로세스를 torchrun으로 교체한다.
+    # Hydra가 먼저 실행된 뒤 cfg를 읽으므로 커맨드라인 override도 자연스럽게 반영된다.
+    # torchrun이 띄운 하위 프로세스는 LOCAL_RANK 환경변수를 가지므로 재귀 재시작은 없다.
+    nproc = cfg.get("distributed", {}).get("nproc_per_node", 1)
+    if nproc > 1 and "LOCAL_RANK" not in os.environ:
+        cmd = ["torchrun", f"--nproc_per_node={nproc}"] + sys.argv
+        logger.info(f"DDP 모드: torchrun으로 재시작 (nproc_per_node={nproc})")
+        os.execvp("torchrun", cmd)
+
     # 증강 설정 로드 후 cfg.augmentation으로 병합
     aug_config_path = Path(_PROJECT_ROOT) / cfg.data.aug_pipeline_config
     aug_cfg = OmegaConf.load(aug_config_path)
@@ -185,7 +198,10 @@ def main(cfg: DictConfig) -> None:
     # 저장 결과는 다음 Stage 또는 추론에서 from_pretrained()로 직접 로드 가능
     output_dir = Path(cfg.training.output_dir) / "final"
     logger.info(f"DoRA 병합 및 모델 저장 중: {output_dir}")
-    merge_dora_and_save(model, tokenizer, output_dir)
+    # DDP에서는 trainer.model이 DistributedDataParallel로 래핑되어 있으므로
+    # accelerator.unwrap_model()로 실제 PeftModel을 추출한 뒤 merge_and_unload
+    raw_model = trainer.accelerator.unwrap_model(trainer.model)
+    merge_dora_and_save(raw_model, tokenizer, output_dir)
 
     logger.info("=== SFT 훈련 완료 ===")
 

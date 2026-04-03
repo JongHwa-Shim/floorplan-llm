@@ -24,6 +24,10 @@ data:
   # 증강 설정 yaml 경로 (프로젝트 루트 기준 상대경로)
   aug_pipeline_config: "config/training/augmentation/pre_stage.yaml"
 
+distributed:
+  # 사용할 GPU 수. 1이면 단일 GPU 모드, 2 이상이면 torchrun DDP로 자동 전환
+  nproc_per_node: 1
+
 resume:
   enabled: false
   # 특정 체크포인트 경로 직접 지정 (null이면 auto_find_latest 동작)

@@ -357,6 +357,10 @@ uv run python scripts/training/run_pre_stage.py \
 uv run python scripts/training/run_pre_stage.py \
     model.user=meta-llama model.name=Llama-3.1-8B
 
+# DDP 멀티 GPU: nproc_per_node를 config에서 설정하거나 override로 지정
+uv run python scripts/training/run_pre_stage.py \
+    distributed.nproc_per_node=2
+
 # 계속 훈련: 최신 체크포인트 자동 탐색 후 재개
 uv run python scripts/training/run_pre_stage.py \
     resume.enabled=true
@@ -382,6 +386,10 @@ uv run python scripts/training/run_sft.py \
 # 하이퍼파라미터 오버라이드
 uv run python scripts/training/run_sft.py \
     training.learning_rate=1e-4 dora.r=16
+
+# DDP 멀티 GPU: nproc_per_node를 config에서 설정하거나 override로 지정
+uv run python scripts/training/run_sft.py \
+    distributed.nproc_per_node=2
 
 # 계속 훈련: 최신 체크포인트 자동 탐색 후 재개
 uv run python scripts/training/run_sft.py \

@@ -39,6 +39,10 @@ data:
   max_length: 4096
   aug_pipeline_config: "config/training/augmentation/sft.yaml"
 
+distributed:
+  # 사용할 GPU 수. 1이면 단일 GPU 모드, 2 이상이면 torchrun DDP로 자동 전환
+  nproc_per_node: 1
+
 resume:
   enabled: false
   checkpoint_path: null
@@ -47,9 +51,9 @@ resume:
 training:
   output_dir: "data/models/${model.name}/checkpoints/sft"
   num_train_epochs: 3
-  per_device_train_batch_size: 1
+  per_device_train_batch_size: 8
   per_device_eval_batch_size: 2
-  gradient_accumulation_steps: 4      # 실효 배치 크기 4
+  gradient_accumulation_steps: 1      # GPU 2대 DDP: 실효배치 = GPU 개수 × batch 개수 × accum 개수
   learning_rate: 2.0e-4               # QLoRA 및 QDoRA는 full fine-tuning보다 높은 LR 사용 권장
   lr_scheduler_type: "cosine"
   warmup_ratio: 0.03

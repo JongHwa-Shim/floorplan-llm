@@ -62,6 +62,9 @@ def build_training_arguments(cfg: DictConfig) -> TrainingArguments:
         gradient_checkpointing_kwargs={"use_reentrant": False},
         # 데이터셋에 label이 포함되어 있으므로 label_names 명시
         label_names=["labels"],
+        # DoRA adapter 파라미터는 매 forward에서 gradient 수신
+        # DDP unused parameter 탐지를 비활성화하여 불필요한 오버헤드 제거
+        ddp_find_unused_parameters=False,
     )
 
     if max_steps > 0:
