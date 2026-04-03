@@ -8,6 +8,9 @@ Transformer 레이어 전체는 동결된 상태로, PartialEmbedding / PartialL
     # 기본 실행 (config/training/pre_stage/pipeline.yaml 사용)
     uv run python scripts/training/run_pre_stage.py
 
+    # DDP 멀티 GPU (2개)
+    uv run torchrun --nproc_per_node=2 scripts/training/run_pre_stage.py
+
     # 하이퍼파라미터 오버라이드
     uv run python scripts/training/run_pre_stage.py training.learning_rate=1e-3
 
@@ -126,6 +129,16 @@ def main(cfg: DictConfig) -> None:
     """
     logger.info("=== Pre-Stage 훈련 시작 ===")
 
+    # DDP 재시작: distributed.nproc_per_node > 1이고 아직 torchrun 하위 프로세스가 아니면
+    # os.execvp로 현재 프로세스를 torchrun으로 교체한다.
+    # Hydra가 먼저 실행된 뒤 cfg를 읽으므로 커맨드라인 override도 자연스럽게 반영된다.
+    # torchrun이 띄운 하위 프로세스는 LOCAL_RANK 환경변수를 가지므로 재귀 재시작은 없다.
+    nproc = cfg.get("distributed", {}).get("nproc_per_node", 1)
+    if nproc > 1 and "LOCAL_RANK" not in os.environ:
+        cmd = ["torchrun", f"--nproc_per_node={nproc}"] + sys.argv
+        logger.info(f"DDP 모드: torchrun으로 재시작 (nproc_per_node={nproc})")
+        os.execvp("torchrun", cmd)
+
     # 증강 설정 로드 후 cfg.augmentation으로 병합
     # validate_augmentation.py와 동일한 패턴: _PROJECT_ROOT 기준 상대경로로 resolve
     aug_config_path = Path(_PROJECT_ROOT) / cfg.data.aug_pipeline_config
@@ -194,8 +207,11 @@ def main(cfg: DictConfig) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"새 토큰 가중치 병합 및 모델 저장 중: {output_dir}")
-    merge_and_restore(model)
-    model.save_pretrained(str(output_dir))
+    # DDP에서는 trainer.model이 DistributedDataParallel로 래핑되어 있으므로
+    # accelerator.unwrap_model()로 실제 모델을 추출한 뒤 저장
+    raw_model = trainer.accelerator.unwrap_model(trainer.model)
+    merge_and_restore(raw_model)
+    raw_model.save_pretrained(str(output_dir))
     tokenizer.save_pretrained(str(output_dir))
 
     logger.info("=== Pre-Stage 훈련 완료 ===")

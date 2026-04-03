@@ -64,7 +64,6 @@ def load_model_and_tokenizer(
     model = AutoModelForCausalLM.from_pretrained(
         str(model_dir),
         quantization_config=bnb_config,
-        device_map="auto",
         torch_dtype=torch.bfloat16,
         trust_remote_code=True,
     )

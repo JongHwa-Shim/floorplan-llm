@@ -95,18 +95,22 @@ class PreStageTrainer(Trainer):
         os.makedirs(output_dir, exist_ok=True)
 
         # 2. partial_state.pt 저장: 현재 훈련된 new_embed/new_lm_head 값 보존
-        embed = model.model.embed_tokens
-        lm_head = model.lm_head
+        # DDP에서는 model이 DistributedDataParallel로 래핑되므로 .module로 실제 모델에 접근
+        raw_model = model.module if hasattr(model, "module") else model
+        embed = raw_model.model.embed_tokens
+        lm_head = raw_model.lm_head
         if isinstance(embed, PartialEmbedding) and isinstance(lm_head, PartialLMHead):
-            torch.save(
-                {
-                    "new_embed": embed.new_embed.data.cpu(),
-                    "new_lm_head": lm_head.new_lm_head.data.cpu(),
-                    "new_token_ids": self._new_token_ids,
-                },
-                os.path.join(output_dir, "partial_state.pt"),
-            )
-            logger.info(f"partial_state.pt 저장 완료: {output_dir}")
+            # DDP에서는 모든 rank가 _save_checkpoint를 호출하므로 rank 0만 저장
+            if self.is_world_process_zero():
+                torch.save(
+                    {
+                        "new_embed": embed.new_embed.data.cpu(),
+                        "new_lm_head": lm_head.new_lm_head.data.cpu(),
+                        "new_token_ids": self._new_token_ids,
+                    },
+                    os.path.join(output_dir, "partial_state.pt"),
+                )
+                logger.info(f"partial_state.pt 저장 완료: {output_dir}")
 
         # 3. optimizer/scheduler/trainer_state 저장 (model.safetensors는 저장 안 함)
         # self.save_model을 일시 no-op으로 교체하여 모델 가중치 저장만 건너뜀
@@ -143,6 +147,8 @@ class PreStageTrainer(Trainer):
             return
 
         target_model = model if model is not None else self.model
+        # DDP 언래핑: DistributedDataParallel 래퍼 안쪽의 실제 모델 접근
+        target_model = target_model.module if hasattr(target_model, "module") else target_model
         embed = target_model.model.embed_tokens
         lm_head = target_model.lm_head
 
@@ -185,8 +191,10 @@ class PreStageTrainer(Trainer):
         partial_state = torch.load(
             partial_state_path, map_location="cpu", weights_only=True
         )
-        embed = self.model.model.embed_tokens
-        lm_head = self.model.lm_head
+        # DDP 언래핑: DistributedDataParallel 래퍼 안쪽의 실제 모델 접근
+        raw_model = self.model.module if hasattr(self.model, "module") else self.model
+        embed = raw_model.model.embed_tokens
+        lm_head = raw_model.lm_head
 
         if isinstance(embed, PartialEmbedding):
             embed.new_embed.data.copy_(
@@ -241,6 +249,9 @@ def build_training_arguments(cfg: DictConfig) -> TrainingArguments:
         gradient_checkpointing=False,
         # 데이터셋에 label이 포함되어 있으므로 label_names 명시
         label_names=["labels"],
+        # DoRA adapter + PartialEmbedding/PartialLMHead 파라미터는 매 forward에서 gradient 수신
+        # DDP unused parameter 탐지를 비활성화하여 불필요한 오버헤드 제거
+        ddp_find_unused_parameters=False,
     )
 
     if max_steps > 0:
