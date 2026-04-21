@@ -147,7 +147,7 @@ def main(cfg: DictConfig) -> None:
     # Resume 체크포인트 경로 결정
     resume_checkpoint = _resolve_checkpoint(cfg)
 
-    # 모델 + 토크나이저 로드 (로컬 sft/final + DoRA 적용)
+    # 모델 + 토크나이저 로드 (로컬 sft/final + LoRA 멀티 어댑터 스태킹)
     logger.info("모델 및 토크나이저 로드 중...")
     model, tokenizer = load_model_and_tokenizer(cfg)
 

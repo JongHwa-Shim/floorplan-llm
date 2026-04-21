@@ -1,6 +1,6 @@
 """SFT(Supervised Fine-Tuning) 훈련 실행 스크립트.
 
-Pre-Stage에서 워밍업된 로컬 모델(pre_stage/final)에 DoRA를 적용하여
+Pre-Stage에서 워밍업된 로컬 모델(pre_stage/final)에 LoRA를 적용하여
 전체 attention/MLP 레이어를 fine-tuning하는 단계.
 
 사용법:
@@ -157,7 +157,7 @@ def main(cfg: DictConfig) -> None:
     # Resume 체크포인트 경로 결정
     resume_checkpoint = _resolve_checkpoint(cfg)
 
-    # 모델 + 토크나이저 로드 (로컬 pre_stage/final + DoRA 적용)
+    # 모델 + 토크나이저 로드 (로컬 pre_stage/final + LoRA 적용)
     logger.info("모델 및 토크나이저 로드 중...")
     model, tokenizer = load_model_and_tokenizer(cfg)
 
@@ -187,7 +187,7 @@ def main(cfg: DictConfig) -> None:
     trainer.log_metrics("train", train_result.metrics)
     trainer.save_metrics("train", train_result.metrics)
 
-    # 최종 평가 (merge 이전에 수행해야 DoRA adapter의 학습된 가중치로 평가)
+    # 최종 평가 (merge 이전에 수행해야 LoRA adapter의 학습된 가중치로 평가)
     logger.info("최종 평가 실행 중...")
     eval_metrics = trainer.evaluate()
     logger.info(f"최종 평가 결과: {eval_metrics}")
