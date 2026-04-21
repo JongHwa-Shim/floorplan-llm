@@ -15,11 +15,15 @@ dependencies = [
     "transformers>=4.51.0",
     "tqdm>=4.67.3",
     "datasets>=4.6.1",
-    # Pre-Stage 훈련 의존성
+    # Pre-Stage / SFT 훈련 의존성
     "peft>=0.15.0",
     "bitsandbytes>=0.45.0",
     "accelerate>=1.6.0",
     "wandb>=0.19.0",
+    # GRPO 강화학습 의존성
+    "trl>=0.17.0",
+    "shapely>=2.0.0",
+    "scipy>=1.14.0",
 ]
 
 [tool.setuptools.packages.find]

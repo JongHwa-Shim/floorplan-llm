@@ -1,29 +1,26 @@
-"""SFT(Supervised Fine-Tuning) 훈련 실행 스크립트.
+"""GRPO(Group Relative Policy Optimization) 훈련 실행 스크립트.
 
-Pre-Stage에서 워밍업된 로컬 모델(pre_stage/final)에 DoRA를 적용하여
-전체 attention/MLP 레이어를 fine-tuning하는 단계.
+SFT final 모델에 GDPO + 토큰 수준 신용할당 강화학습을 적용한다.
+Rule-based RLVR 보상함수로 6가지 보상을 사용한다.
 
 사용법:
-    # 기본 실행 (config/training/sft/pipeline.yaml 사용)
-    uv run python scripts/training/run_sft.py
+    # 기본 실행 (config/training/grpo/pipeline.yaml 사용)
+    uv run python scripts/training/run_grpo.py
 
     # DDP 멀티 GPU (2개)
-    uv run torchrun --nproc_per_node=2 scripts/training/run_sft.py
+    uv run torchrun --nproc_per_node=2 scripts/training/run_grpo.py
 
     # 하이퍼파라미터 오버라이드
-    uv run python scripts/training/run_sft.py training.learning_rate=1e-5
+    uv run python scripts/training/run_grpo.py training.learning_rate=5e-6
 
     # 디버그 모드 (10 step만 실행)
-    uv run python scripts/training/run_sft.py training.max_steps=10 training.report_to=none
+    uv run python scripts/training/run_grpo.py training.max_steps=10 training.report_to=none
 
     # W&B 비활성화
-    uv run python scripts/training/run_sft.py training.report_to=none
+    uv run python scripts/training/run_grpo.py training.report_to=none
 
-    # Resume: 최신 체크포인트 자동 탐색
-    uv run python scripts/training/run_sft.py resume.enabled=true
-
-    # Resume: 특정 체크포인트 지정
-    uv run python scripts/training/run_sft.py resume.enabled=true resume.checkpoint_path=data/models/Qwen2.5-Coder-7B/checkpoints/sft/checkpoint-500
+    # Resume
+    uv run python scripts/training/run_grpo.py resume.enabled=true
 """
 
 import logging
@@ -42,12 +39,12 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from src.training.sft import (
-    SFTDataset,
-    build_trainer,
+from src.training.grpo import (
+    GDPOTrainer,
+    GRPOPromptDataset,
     load_model_and_tokenizer,
-    save_adapter_only,
 )
+from src.training.augmentation.tokenizer import load_vocab
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +59,6 @@ def set_seed(seed: int) -> None:
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    # CuDNN 결정론적 모드 (성능 저하가 있을 수 있으나 재현성 보장)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
@@ -84,7 +80,6 @@ def _resolve_checkpoint(cfg: DictConfig) -> str | None:
     if not resume_cfg.get("enabled", False):
         return None
 
-    # 체크포인트 경로 직접 지정
     checkpoint_path = resume_cfg.get("checkpoint_path")
     if checkpoint_path:
         path = Path(checkpoint_path)
@@ -93,14 +88,12 @@ def _resolve_checkpoint(cfg: DictConfig) -> str | None:
         logger.info(f"지정된 체크포인트로 Resume: {path}")
         return str(path)
 
-    # 최신 체크포인트 자동 탐색
     if resume_cfg.get("auto_find_latest", True):
         output_dir = Path(cfg.training.output_dir)
         if not output_dir.exists():
             logger.warning(f"output_dir가 없어 Resume 불가: {output_dir}. 처음부터 시작합니다.")
             return None
 
-        # checkpoint-{step} 형식의 디렉토리를 step 번호 기준으로 정렬
         checkpoints = sorted(
             [p for p in output_dir.glob("checkpoint-*") if p.is_dir()],
             key=lambda p: int(p.name.split("-")[-1]),
@@ -116,22 +109,20 @@ def _resolve_checkpoint(cfg: DictConfig) -> str | None:
 
 
 @hydra.main(
-    config_path=os.path.join(_PROJECT_ROOT, "config", "training", "sft"),
+    config_path=os.path.join(_PROJECT_ROOT, "config", "training", "grpo"),
     config_name="pipeline",
     version_base="1.3",
 )
 def main(cfg: DictConfig) -> None:
-    """SFT 훈련 메인 함수.
+    """GRPO 훈련 메인 함수.
 
     Args:
         cfg: Hydra가 주입하는 DictConfig.
     """
-    logger.info("=== SFT 훈련 시작 ===")
+    logger.info("=== GRPO 훈련 시작 ===")
 
-    # DDP 재시작: distributed.nproc_per_node > 1이고 아직 torchrun 하위 프로세스가 아니면
-    # os.execvp로 현재 프로세스를 torchrun으로 교체한다.
-    # Hydra가 먼저 실행된 뒤 cfg를 읽으므로 커맨드라인 override도 자연스럽게 반영된다.
-    # torchrun이 띄운 하위 프로세스는 LOCAL_RANK 환경변수를 가지므로 재귀 재시작은 없다.
+    # DDP 재시작: nproc_per_node > 1이고 아직 torchrun 하위 프로세스가 아니면
+    # os.execvp로 현재 프로세스를 torchrun으로 교체
     nproc = cfg.get("distributed", {}).get("nproc_per_node", 1)
     if nproc > 1 and "LOCAL_RANK" not in os.environ:
         cmd = ["torchrun", f"--nproc_per_node={nproc}"] + sys.argv
@@ -141,7 +132,6 @@ def main(cfg: DictConfig) -> None:
     # 증강 설정 로드 후 cfg.augmentation으로 병합
     aug_config_path = Path(_PROJECT_ROOT) / cfg.data.aug_pipeline_config
     aug_cfg = OmegaConf.load(aug_config_path)
-    # Hydra DictConfig는 struct 모드라 선언되지 않은 키 추가 불가 → 일시 해제 후 병합
     OmegaConf.set_struct(cfg, False)
     OmegaConf.update(cfg, "augmentation", aug_cfg, merge=True)
     OmegaConf.set_struct(cfg, True)
@@ -157,55 +147,98 @@ def main(cfg: DictConfig) -> None:
     # Resume 체크포인트 경로 결정
     resume_checkpoint = _resolve_checkpoint(cfg)
 
-    # 모델 + 토크나이저 로드 (로컬 pre_stage/final + DoRA 적용)
+    # 모델 + 토크나이저 로드 (로컬 sft/final + DoRA 적용)
     logger.info("모델 및 토크나이저 로드 중...")
     model, tokenizer = load_model_and_tokenizer(cfg)
 
-    # 데이터셋 로드 (증강 파이프라인 포함)
-    # SFTDataset = PreStageDataset alias: 데이터 포맷 동일
-    logger.info("데이터셋 로드 중...")
-    train_dataset = SFTDataset(cfg, tokenizer, split="train", seed=seed)
-    eval_dataset = SFTDataset(cfg, tokenizer, split="validation", seed=seed + 1)
+    # Vocab 로드 (파서 및 데이터셋에서 필요)
+    vocab_path = Path(_PROJECT_ROOT) / cfg.model.vocab_extension
+    vocab = load_vocab(vocab_path, cfg.model.tokenizer_dir)
+    logger.info(f"Vocab 로드 완료: {len(vocab.token_to_id)}개 커스텀 토큰")
 
-    # Trainer 구성
-    trainer = build_trainer(
+    # GRPO 프롬프트 데이터셋 로드 (output 없이 prompt + metadata만)
+    logger.info("데이터셋 로드 중...")
+    train_dataset = GRPOPromptDataset(cfg, tokenizer, split="train", seed=seed)
+    logger.info(f"훈련 데이터셋 크기: {len(train_dataset)}")
+
+    # W&B 프로젝트 설정
+    os.environ["WANDB_PROJECT"] = cfg.training.project_name
+
+    # GRPOConfig 생성
+    from trl import GRPOConfig
+
+    max_steps = int(cfg.training.get("max_steps", 0))
+    grpo_config_kwargs = dict(
+        output_dir=cfg.training.output_dir,
+        num_train_epochs=cfg.training.num_train_epochs,
+        per_device_train_batch_size=cfg.training.per_device_train_batch_size,
+        gradient_accumulation_steps=cfg.training.gradient_accumulation_steps,
+        learning_rate=cfg.training.learning_rate,
+        lr_scheduler_type=cfg.training.lr_scheduler_type,
+        warmup_ratio=cfg.training.warmup_ratio,
+        weight_decay=cfg.training.weight_decay,
+        bf16=cfg.training.bf16,
+        logging_steps=cfg.training.logging_steps,
+        save_strategy=cfg.training.save_strategy,
+        save_steps=cfg.training.save_steps,
+        report_to=cfg.training.report_to,
+        run_name=cfg.training.run_name,
+        seed=cfg.training.seed,
+        save_total_limit=cfg.training.get("save_total_limit", 3),
+        # GRPO 설정
+        num_generations=cfg.grpo.num_generations,
+        temperature=cfg.grpo.temperature,
+        top_p=cfg.grpo.top_p,
+        beta=cfg.grpo.kl_coeff,                   # KL 페널티 계수
+        epsilon=cfg.grpo.clip_range,              # PPO 클리핑 엡실론
+        num_iterations=cfg.grpo.num_iterations,   # roll-out 재활용 횟수
+        max_completion_length=cfg.data.max_completion_length,
+        # GDPO는 GDPOTrainer에서 직접 처리
+        # TRL의 기본 normalize_then_sum 모드 사용 (GDPOTrainer에서 오버라이드)
+        multi_objective_aggregation="normalize_then_sum",
+        # 그래디언트 체크포인팅
+        gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
+        ddp_find_unused_parameters=False,
+        optim=cfg.training.get("optim", "paged_adamw_32bit"),
+    )
+
+    if max_steps > 0:
+        grpo_config_kwargs["max_steps"] = max_steps
+
+    grpo_config = GRPOConfig(**grpo_config_kwargs)
+
+    # GDPOTrainer 생성
+    logger.info("GDPOTrainer 생성 중...")
+    trainer = GDPOTrainer(
         model=model,
-        tokenizer=tokenizer,
+        args=grpo_config,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        cfg=cfg,
+        processing_class=tokenizer,
+        reward_cfg=cfg.rewards,
+        advantage_cfg=cfg.advantage,
+        vocab=vocab,
     )
 
     # 훈련 실행
-    logger.info("훈련 시작...")
+    logger.info("GRPO 훈련 시작...")
     if resume_checkpoint:
         logger.info(f"Resume from checkpoint: {resume_checkpoint}")
-    train_result = trainer.train(resume_from_checkpoint=resume_checkpoint)
+    trainer.train(resume_from_checkpoint=resume_checkpoint)
 
-    # 훈련 결과 로그
-    logger.info(f"훈련 완료: {train_result.metrics}")
-    trainer.log_metrics("train", train_result.metrics)
-    trainer.save_metrics("train", train_result.metrics)
-
-    # 최종 평가 (merge 이전에 수행해야 DoRA adapter의 학습된 가중치로 평가)
-    logger.info("최종 평가 실행 중...")
-    eval_metrics = trainer.evaluate()
-    logger.info(f"최종 평가 결과: {eval_metrics}")
-    trainer.log_metrics("eval", eval_metrics)
-    trainer.save_metrics("eval", eval_metrics)
+    # 훈련 완료 로그
+    logger.info("훈련 완료")
 
     # 최종 저장: 중간 체크포인트와 동일한 구조 (adapter_model.safetensors + optimizer.pt + trainer_state.json)
     # Mod Record: 이전 구조에서는 merge_dora_and_save()로 full model을 저장했음.
-    # 새 구조에서는 GRPO도 HF Hub에서 base model을 새로 로드하므로 adapter만 저장하면 충분.
+    # 새 구조에서는 GRPO adapter만 저장. 추론 시 멀티 어댑터 스태킹으로 복원.
     output_dir = Path(cfg.training.output_dir) / "final"
     logger.info(f"최종 체크포인트 저장 중: {output_dir}")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    raw_model = trainer.accelerator.unwrap_model(trainer.model)
-    save_adapter_only(raw_model, output_dir)
+    trainer.save_model(str(output_dir))
     trainer._save_optimizer_and_scheduler(str(output_dir))
     trainer.state.save_to_json(str(output_dir / "trainer_state.json"))
 
-    logger.info("=== SFT 훈련 완료 ===")
+    logger.info("=== GRPO 훈련 완료 ===")
 
 
 if __name__ == "__main__":

@@ -48,7 +48,6 @@ from src.training.pre_stage import (
     build_trainer,
     load_model_and_tokenizer,
 )
-from src.training.pre_stage.model_loader import merge_and_restore
 
 logger = logging.getLogger(__name__)
 
@@ -200,19 +199,13 @@ def main(cfg: DictConfig) -> None:
     trainer.log_metrics("eval", eval_metrics)
     trainer.save_metrics("eval", eval_metrics)
 
-    # 최종 모델 저장
-    # PartialEmbedding/PartialLMHead의 새 토큰 가중치를 원본 모듈에 병합한 뒤
-    # 표준 HuggingFace 형식으로 저장 (다음 Stage에서 from_pretrained로 로드 가능)
+    # 최종 저장: 중간 체크포인트와 완전히 동일한 구조 (partial_state.pt + optimizer.pt + trainer_state.json)
+    # Mod Record: 이전 구조에서는 merge_and_restore() 후 model.safetensors 전체를 저장했음.
+    # 다음 stage(SFT/GRPO)도 HF Hub에서 base model을 새로 로드하므로 전체 모델 저장은 불필요.
+    # final도 resume 시작점으로 사용될 수 있으므로 중간 체크포인트와 동일하게 저장한다.
     output_dir = Path(cfg.training.output_dir) / "final"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    logger.info(f"새 토큰 가중치 병합 및 모델 저장 중: {output_dir}")
-    # DDP에서는 trainer.model이 DistributedDataParallel로 래핑되어 있으므로
-    # accelerator.unwrap_model()로 실제 모델을 추출한 뒤 저장
-    raw_model = trainer.accelerator.unwrap_model(trainer.model)
-    merge_and_restore(raw_model)
-    raw_model.save_pretrained(str(output_dir))
-    tokenizer.save_pretrained(str(output_dir))
+    logger.info(f"최종 체크포인트 저장 중: {output_dir}")
+    trainer.save_final_checkpoint(str(output_dir))
 
     logger.info("=== Pre-Stage 훈련 완료 ===")
 

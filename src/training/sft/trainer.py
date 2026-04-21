@@ -51,6 +51,7 @@ def build_training_arguments(cfg: DictConfig) -> TrainingArguments:
         logging_steps=train_cfg.logging_steps,
         report_to=train_cfg.report_to,
         run_name=train_cfg.run_name,
+        optim=train_cfg.get("optim", "paged_adamw_32bit"),
         seed=train_cfg.seed,
         save_total_limit=train_cfg.get("save_total_limit", 3),
         load_best_model_at_end=train_cfg.get("load_best_model_at_end", True),

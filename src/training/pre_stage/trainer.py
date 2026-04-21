@@ -95,22 +95,7 @@ class PreStageTrainer(Trainer):
         os.makedirs(output_dir, exist_ok=True)
 
         # 2. partial_state.pt 저장: 현재 훈련된 new_embed/new_lm_head 값 보존
-        # DDP에서는 model이 DistributedDataParallel로 래핑되므로 .module로 실제 모델에 접근
-        raw_model = model.module if hasattr(model, "module") else model
-        embed = raw_model.model.embed_tokens
-        lm_head = raw_model.lm_head
-        if isinstance(embed, PartialEmbedding) and isinstance(lm_head, PartialLMHead):
-            # DDP에서는 모든 rank가 _save_checkpoint를 호출하므로 rank 0만 저장
-            if self.is_world_process_zero():
-                torch.save(
-                    {
-                        "new_embed": embed.new_embed.data.cpu(),
-                        "new_lm_head": lm_head.new_lm_head.data.cpu(),
-                        "new_token_ids": self._new_token_ids,
-                    },
-                    os.path.join(output_dir, "partial_state.pt"),
-                )
-                logger.info(f"partial_state.pt 저장 완료: {output_dir}")
+        self._save_partial_state(output_dir, model=model)
 
         # 3. optimizer/scheduler/trainer_state 저장 (model.safetensors는 저장 안 함)
         # self.save_model을 일시 no-op으로 교체하여 모델 가중치 저장만 건너뜀
@@ -123,6 +108,47 @@ class PreStageTrainer(Trainer):
             self.save_model = _orig_save_model
 
         logger.info("체크포인트 저장 완료 (partial_state.pt + optimizer/scheduler/trainer_state)")
+
+    def _save_partial_state(self, output_dir: str, model=None) -> None:
+        """new_embed/new_lm_head를 partial_state.pt로 저장하는 공통 헬퍼.
+
+        _save_checkpoint와 save_final_checkpoint에서 재사용한다.
+
+        Args:
+            output_dir: 저장 대상 디렉토리 경로.
+            model: 저장할 모델. None이면 self.model 사용. DDP 래퍼 자동 언래핑.
+        """
+        target = model if model is not None else self.model
+        raw_model = target.module if hasattr(target, "module") else target
+        embed = raw_model.model.embed_tokens
+        lm_head = raw_model.lm_head
+        if isinstance(embed, PartialEmbedding) and isinstance(lm_head, PartialLMHead):
+            if self.is_world_process_zero():
+                torch.save(
+                    {
+                        "new_embed": embed.new_embed.data.cpu(),
+                        "new_lm_head": lm_head.new_lm_head.data.cpu(),
+                        "new_token_ids": self._new_token_ids,
+                    },
+                    os.path.join(output_dir, "partial_state.pt"),
+                )
+                logger.info(f"partial_state.pt 저장 완료: {output_dir}")
+
+    def save_final_checkpoint(self, output_dir: str) -> None:
+        """중간 체크포인트와 완전히 동일한 구조로 최종 저장.
+
+        final/ 디렉토리도 resume 시작점으로 사용될 수 있으므로
+        중간 체크포인트와 동일하게 partial_state.pt + optimizer.pt + trainer_state.json을 저장한다.
+
+        Args:
+            output_dir: 저장 대상 디렉토리 경로 (보통 training.output_dir/final).
+        """
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        self._save_partial_state(output_dir)
+        self._save_optimizer_and_scheduler(output_dir)
+        if self.is_world_process_zero():
+            self.state.save_to_json(os.path.join(output_dir, "trainer_state.json"))
+        logger.info(f"최종 체크포인트 저장 완료: {output_dir}")
 
     def _load_from_checkpoint(self, resume_from_checkpoint: str, model=None):
         """체크포인트에서 new_embed/new_lm_head 복원.
@@ -240,6 +266,7 @@ def build_training_arguments(cfg: DictConfig) -> TrainingArguments:
         logging_steps=train_cfg.logging_steps,
         report_to=train_cfg.report_to,
         run_name=train_cfg.run_name,
+        optim=train_cfg.get("optim", "paged_adamw_32bit"),
         seed=train_cfg.seed,
         save_total_limit=train_cfg.get("save_total_limit", 3),
         load_best_model_at_end=train_cfg.get("load_best_model_at_end", True),

@@ -85,6 +85,7 @@ class FloorplanVisualizer:
         - front_door_front_door.png: 현관문 개별 이미지
         - door.png: 모든 문 통합 이미지 (256x256)
         - floorplan.png: 전체 평면도 이미지 (256x256, outline 먼저 렌더링)
+        - unknown_type.png: 타입이 삭제된 방들만 모은 이미지 (해당 방이 있을 때만 저장)
 
         Args:
             floorplan: 평면도 JSON 딕셔너리.
@@ -110,23 +111,33 @@ class FloorplanVisualizer:
         # 4) 전체 평면도 이미지 저장 (floorplan.png) - outline 먼저
         self._save_floorplan_image(floorplan, output_dir)
 
+        # 5) 타입 미상 방 별도 이미지 저장 (unknown_type.png)
+        unknown_rooms = [r for r in rooms if r.get("type") == "unknown"]
+        if unknown_rooms:
+            self._save_unknown_type_image(unknown_rooms, output_dir)
+
     def _save_room_image(self, room: dict, output_dir: Path) -> None:
         """방 하나를 256x256 개별 이미지로 저장한다.
+
+        좌표가 비어있는 경우(drop_coords 적용 시)에도 빈 캔버스 이미지를 저장한다.
 
         Args:
             room: {'rid', 'type', 'coords'} 딕셔너리.
             output_dir: 저장 디렉토리.
         """
         canvas = self.renderer.create_canvas()
-        room_type = room["type"]
+        room_type = room.get("type", "unknown")
+        coords = room.get("coords", [])
 
-        self.renderer.draw_room_polygon(
-            canvas,
-            room["coords"],
-            self._get_fill_color(room_type),
-            self._get_border_color(room_type),
-            label=room_type,
-        )
+        # 좌표가 있을 때만 폴리곤 렌더링 (drop_coords 적용 시 coords=[])
+        if coords:
+            self.renderer.draw_room_polygon(
+                canvas,
+                coords,
+                self._get_fill_color(room_type),
+                self._get_border_color(room_type),
+                label=room_type,
+            )
 
         cv2.imwrite(str(output_dir / f"{room['rid']}_{room_type}.png"), canvas)
 
@@ -147,7 +158,7 @@ class FloorplanVisualizer:
             label="front_door",
         )
 
-        cv2.imwrite(str(output_dir / "front_door_front_door.png"), canvas)
+        cv2.imwrite(str(output_dir / "front_door.png"), canvas)
 
     def _save_doors_image(self, floorplan: dict, output_dir: Path) -> None:
         """모든 문(edges의 door들만, front door 제외)을 256x256 이미지 하나에 저장한다.
@@ -197,6 +208,8 @@ class FloorplanVisualizer:
         other_rooms = [r for r in rooms if r["type"] != "outline"]
 
         for room in outline_rooms:
+            if not room.get("coords"):  # drop_coords 적용 시 스킵
+                continue
             self.renderer.draw_room_polygon(
                 canvas,
                 room["coords"],
@@ -206,8 +219,11 @@ class FloorplanVisualizer:
             )
 
         # 나머지 방 그리기 (outline 위에 overlap)
+        # "unknown" 타입(drop_type 적용)도 default_fill_color(회색)로 렌더링됨
         for room in other_rooms:
-            room_type = room["type"]
+            if not room.get("coords"):  # drop_coords 적용 시 스킵
+                continue
+            room_type = room.get("type", "unknown")
             self.renderer.draw_room_polygon(
                 canvas,
                 room["coords"],
@@ -235,3 +251,27 @@ class FloorplanVisualizer:
             )
 
         cv2.imwrite(str(output_dir / "floorplan.png"), canvas)
+
+    def _save_unknown_type_image(self, unknown_rooms: list[dict], output_dir: Path) -> None:
+        """타입이 삭제된 방들(type="unknown")만 모아 256x256 이미지로 저장한다.
+
+        입력 조건 시각화 시 drop_type 증강으로 타입이 제거된 방을 별도로 확인할 수 있다.
+        각 방은 default_fill_color(회색)로 렌더링되며 rid 레이블이 표시된다.
+
+        Args:
+            unknown_rooms: type이 "unknown"인 방 딕셔너리 리스트.
+            output_dir: 저장 디렉토리.
+        """
+        canvas = self.renderer.create_canvas()
+        fill_color = tuple(self.cfg.default_fill_color)
+        border_color = tuple(self.cfg.default_border_color)
+
+        for room in unknown_rooms:
+            coords = room.get("coords", [])
+            if not coords:
+                continue
+            # 타입 대신 rid를 레이블로 표시하여 어떤 방인지 식별 가능하게 함
+            label = f"rid:{room.get('rid', '?')}"
+            self.renderer.draw_room_polygon(canvas, coords, fill_color, border_color, label=label)
+
+        cv2.imwrite(str(output_dir / "unknown_type.png"), canvas)

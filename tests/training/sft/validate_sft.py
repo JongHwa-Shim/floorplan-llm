@@ -96,7 +96,7 @@ def set_seed(seed: int = 42) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
-def load_cfg(output_dir: str, max_steps: int, model_dir: str | None = None) -> DictConfig:
+def load_cfg(output_dir: str, max_steps: int, pre_stage_dir: str | None = None) -> DictConfig:
     """테스트용 DictConfig를 구성한다.
 
     run_sft.py와 동일한 방식으로 pipeline.yaml과 augmentation config를 로드하고,
@@ -105,7 +105,7 @@ def load_cfg(output_dir: str, max_steps: int, model_dir: str | None = None) -> D
     Args:
         output_dir: 체크포인트 저장 경로.
         max_steps: 최대 훈련 step 수.
-        model_dir: 모델 로드 경로. None이면 pipeline.yaml 기본값 사용.
+        pre_stage_dir: partial_state.pt가 있는 pre_stage/final 경로. None이면 pipeline.yaml 기본값 사용.
 
     Returns:
         테스트용 DictConfig.
@@ -129,9 +129,8 @@ def load_cfg(output_dir: str, max_steps: int, model_dir: str | None = None) -> D
     cfg.training.dataloader_num_workers = 0  # subprocess worker 없이 실행
     cfg.training.logging_steps = 1
 
-    if model_dir is not None:
-        cfg.model.model_dir = model_dir
-        cfg.model.tokenizer_dir = model_dir
+    if pre_stage_dir is not None:
+        cfg.model.pre_stage_dir = pre_stage_dir
 
     OmegaConf.set_struct(cfg, True)
     return cfg
@@ -227,11 +226,15 @@ class SaveAtStepCallback(TrainerCallback):
 
 # ── Phase 0: 파일 존재 확인 ────────────────────────────────────────────────
 
-def phase0_file_existence(model_dir: str) -> bool:
-    """pre_stage/final 디렉토리의 필수 파일 존재를 확인한다.
+def phase0_file_existence(pre_stage_dir: str) -> bool:
+    """pre_stage/final 디렉토리의 partial_state.pt 존재를 확인한다.
+
+    Mod Record: 새 구조에서는 pre_stage/final에 model.safetensors가 없고
+    partial_state.pt만 저장된다. SFT는 HF Hub에서 base model을 로드하므로
+    model.safetensors 확인이 아닌 partial_state.pt 확인으로 변경.
 
     Args:
-        model_dir: pre_stage/final 경로 문자열.
+        pre_stage_dir: pre_stage/final 경로 문자열.
 
     Returns:
         검증 통과 여부.
@@ -241,31 +244,29 @@ def phase0_file_existence(model_dir: str) -> bool:
     logger.info("Phase 0: 파일 존재 확인")
     logger.info("─" * 60)
 
-    model_path = Path(model_dir)
+    pre_stage_path = Path(pre_stage_dir)
     passed = True
 
-    # 필수 파일 목록
-    required_files = [
-        "model.safetensors",
-        "config.json",
-        "tokenizer.json",
-        "tokenizer_config.json",
-    ]
-    for fname in required_files:
-        fpath = model_path / fname
-        if fpath.exists():
-            logger.info(f"[PASS] {fname} 존재")
-        else:
-            logger.error(f"[FAIL] {fname} 없음: {fpath}")
-            passed = False
+    # partial_state.pt 존재 확인 (새 구조의 핵심 파일)
+    partial_state_path = pre_stage_path / "partial_state.pt"
+    if partial_state_path.exists():
+        logger.info(f"[PASS] partial_state.pt 존재: {partial_state_path}")
+    else:
+        logger.error(f"[FAIL] partial_state.pt 없음: {partial_state_path}")
+        passed = False
 
-    # vocab_extension.json: pre_stage/final이 아닌 tokenization/ 경로
+    # model.safetensors는 더 이상 필요 없음 (새 구조)
+    model_safetensors = pre_stage_path / "model.safetensors"
+    if model_safetensors.exists():
+        logger.warning(f"[WARN] model.safetensors 존재 (구버전 저장 형식): {model_safetensors}")
+
+    # vocab_extension.json: tokenization/ 경로
+    # Mod Record: 중첩 보간(${model.tokenizer_dir}/vocab_extension.json)을 수동으로 치환하면
+    # ${model.tokenizer_dir}가 남아서 경로 오류가 발생했다. OmegaConf가 자동 해석하도록 변경.
     cfg_tmp = OmegaConf.load(
         Path(_PROJECT_ROOT) / "config" / "training" / "sft" / "pipeline.yaml"
     )
-    vocab_ext_path = Path(_PROJECT_ROOT) / OmegaConf.to_container(cfg_tmp, resolve=False)[
-        "model"
-    ]["vocab_extension"].replace("${model.name}", cfg_tmp.model.name)
+    vocab_ext_path = Path(_PROJECT_ROOT) / cfg_tmp.model.vocab_extension
     if vocab_ext_path.exists():
         logger.info(f"[PASS] vocab_extension.json 존재: {vocab_ext_path}")
     else:
@@ -505,14 +506,14 @@ def phase2_training_update(
 
 # ── Phase 3: 저장 + Resume 검증 ────────────────────────────────────────────
 
-def phase3_checkpoint_and_resume(output_dir: str, model_dir: str | None) -> bool:
+def phase3_checkpoint_and_resume(output_dir: str, pre_stage_dir: str | None) -> bool:
     """DoRA 체크포인트 저장 및 Resume 정합성을 검증한다.
 
     Phase 3은 새 모델 로드가 필요하므로 Phase 1/2 모델과 독립적으로 실행한다.
 
     Args:
         output_dir: 임시 체크포인트 저장 경로.
-        model_dir: 모델 로드 경로 (None이면 기본값 사용).
+        pre_stage_dir: pre_stage/final 경로 (None이면 기본값 사용).
 
     Returns:
         검증 통과 여부.
@@ -527,7 +528,7 @@ def phase3_checkpoint_and_resume(output_dir: str, model_dir: str | None) -> bool
 
     # ── Case 3a: 저장 검증 ────────────────────────────────────────────────────
     logger.info("[Case 3a] 훈련 + 체크포인트 저장 시작...")
-    cfg_3a = load_cfg(output_dir, max_steps=STEPS_3A, model_dir=model_dir)
+    cfg_3a = load_cfg(output_dir, max_steps=STEPS_3A, pre_stage_dir=pre_stage_dir)
     set_seed(42)
 
     model_3a, tokenizer_3a = load_model_and_tokenizer(cfg_3a)
@@ -592,7 +593,7 @@ def phase3_checkpoint_and_resume(output_dir: str, model_dir: str | None) -> bool
 
     # ── Case 3b: Resume 검증 ──────────────────────────────────────────────────
     logger.info("[Case 3b] 새 모델 로드 후 Resume 훈련 시작...")
-    cfg_3b = load_cfg(output_dir, max_steps=STEPS_3A + STEPS_3B, model_dir=model_dir)
+    cfg_3b = load_cfg(output_dir, max_steps=STEPS_3A + STEPS_3B, pre_stage_dir=pre_stage_dir)
     set_seed(42)
 
     model_3b, tokenizer_3b = load_model_and_tokenizer(cfg_3b)
@@ -655,25 +656,23 @@ def phase3_checkpoint_and_resume(output_dir: str, model_dir: str | None) -> bool
     else:
         logger.warning(f"[WARN] trainer_state.json 없음: {trainer_state_path}")
 
-    # ── Case 3c: merge_dora_and_save 최종 병합 저장 검증 ─────────────────────
+    # ── Case 3c: save_adapter_only 최종 저장 검증 ────────────────────────────
     # run_sft.py의 마지막 단계를 검증한다.
-    # validate_sft.py 초기 구현에서 누락됐던 항목:
-    # Phase 3a/3b는 adapter 체크포인트 저장(Trainer 자동)만 검증하고
-    # merge_and_unload() → save_pretrained() 경로를 실행하지 않아
-    # 실제 run_sft.py 실행 시에야 NotImplementedError가 발견됨.
-    logger.info("[Case 3c] merge_dora_and_save 최종 병합 저장 검증...")
-    from src.training.sft.model_loader import merge_dora_and_save
+    # Mod Record: 이전 구조에서는 merge_dora_and_save()로 full model을 저장했음.
+    # 새 구조에서는 save_adapter_only()로 adapter_model.safetensors만 저장.
+    logger.info("[Case 3c] save_adapter_only 최종 저장 검증...")
+    from src.training.sft.model_loader import save_adapter_only
 
     final_save_dir = Path(output_dir) / "final"
     try:
-        merge_dora_and_save(model_3b, tokenizer_3b, final_save_dir)
+        save_adapter_only(model_3b, final_save_dir)
     except Exception as e:
-        logger.error(f"[FAIL] merge_dora_and_save 실패: {e}")
+        logger.error(f"[FAIL] save_adapter_only 실패: {e}")
         passed = False
         return passed
 
-    # 저장된 파일 존재 확인
-    required_final_files = ["model.safetensors", "config.json", "tokenizer.json"]
+    # adapter_model.safetensors + adapter_config.json 존재 확인 (model.safetensors는 없어야 함)
+    required_final_files = ["adapter_model.safetensors", "adapter_config.json"]
     for fname in required_final_files:
         fpath = final_save_dir / fname
         if fpath.exists():
@@ -681,6 +680,13 @@ def phase3_checkpoint_and_resume(output_dir: str, model_dir: str | None) -> bool
         else:
             logger.error(f"[FAIL] final/{fname} 없음: {fpath}")
             passed = False
+
+    # model.safetensors는 존재하면 안 됨 (adapter-only 저장 확인)
+    if (final_save_dir / "model.safetensors").exists():
+        logger.error("[FAIL] final/model.safetensors 존재 — adapter-only 저장이 아님")
+        passed = False
+    else:
+        logger.info("[PASS] final/model.safetensors 없음 (adapter-only 저장 확인)")
 
     return passed
 
@@ -691,18 +697,18 @@ def main() -> None:
     """4개 Phase를 순서대로 실행하고 결과를 출력한다."""
     parser = argparse.ArgumentParser(description="SFT 훈련 전체 검증")
     parser.add_argument(
-        "--model_dir",
+        "--pre_stage_dir",
         type=str,
         default=None,
-        help="pre_stage/final 모델 경로. 미지정 시 pipeline.yaml 기본값 사용.",
+        help="pre_stage/final 경로 (partial_state.pt 위치). 미지정 시 pipeline.yaml 기본값 사용.",
     )
     args = parser.parse_args()
 
-    # model_dir를 절대 경로로 변환 (상대 경로 지정 시 프로젝트 루트 기준)
-    model_dir = None
-    if args.model_dir:
-        p = Path(args.model_dir)
-        model_dir = str(p if p.is_absolute() else Path(_PROJECT_ROOT) / p)
+    # pre_stage_dir를 절대 경로로 변환 (상대 경로 지정 시 프로젝트 루트 기준)
+    pre_stage_dir = None
+    if args.pre_stage_dir:
+        p = Path(args.pre_stage_dir)
+        pre_stage_dir = str(p if p.is_absolute() else Path(_PROJECT_ROOT) / p)
 
     # 임시 출력 디렉토리 초기화
     output_dir = TEST_OUTPUT_DIR
@@ -714,21 +720,21 @@ def main() -> None:
 
     try:
         # ── Phase 0 ────────────────────────────────────────────────────────
-        # model_dir 미지정 시 pipeline.yaml의 기본 경로 사용
+        # pre_stage_dir 미지정 시 pipeline.yaml의 기본 경로 사용
         cfg_tmp = OmegaConf.load(
             Path(_PROJECT_ROOT) / "config" / "training" / "sft" / "pipeline.yaml"
         )
-        effective_model_dir = model_dir or str(
-            Path(_PROJECT_ROOT) / cfg_tmp.model.model_dir
+        effective_pre_stage_dir = pre_stage_dir or str(
+            Path(_PROJECT_ROOT) / cfg_tmp.model.pre_stage_dir
         )
-        results["Phase 0: 파일 존재 확인"] = phase0_file_existence(effective_model_dir)
+        results["Phase 0: 파일 존재 확인"] = phase0_file_existence(effective_pre_stage_dir)
 
         if not results["Phase 0: 파일 존재 확인"]:
             logger.error("Phase 0 실패 — 이후 Phase를 실행할 수 없습니다.")
             sys.exit(1)
 
         # ── Phase 1 + 2 (모델 공유) ─────────────────────────────────────────
-        cfg_p1 = load_cfg(output_dir, max_steps=STEPS_PHASE2, model_dir=model_dir)
+        cfg_p1 = load_cfg(output_dir, max_steps=STEPS_PHASE2, pre_stage_dir=pre_stage_dir)
         set_seed(42)
 
         p1_passed, model, tokenizer = phase1_model_structure(cfg_p1)
@@ -752,7 +758,7 @@ def main() -> None:
         output_dir_3 = str(Path(output_dir) / "phase3")
         Path(output_dir_3).mkdir(parents=True, exist_ok=True)
         results["Phase 3: 저장 + Resume 검증"] = phase3_checkpoint_and_resume(
-            output_dir_3, model_dir
+            output_dir_3, pre_stage_dir
         )
 
     finally:

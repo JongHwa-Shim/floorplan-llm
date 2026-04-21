@@ -35,6 +35,8 @@ floorplan-llm/
 │   ├── build_model/
 │   │   └── tokenization/           # 어휘(Vocabulary) 빌드 설정
 │   │       └── pipeline.yaml
+│   ├── inference/                  # 추론 설정
+│   │   └── pipeline.yaml           # 입력(txt_dir/jsonl/arrow), 생성, 출력 설정
 │   └── training/
 │       ├── augmentation/           # 데이터 증강 프리셋 (Hydra config group)
 │       │   ├── pre_stage.yaml      # Pre-Stage용 증강 설정 → cfg.augmentation으로 병합
@@ -44,8 +46,10 @@ floorplan-llm/
 │       │       └── augmentation.yaml   # 검증에 사용할 증강 파라미터
 │       ├── pre_stage/              # Pre-Stage 훈련 설정
 │       │   └── pipeline.yaml       # defaults로 training/augmentation: pre_stage 합성
-│       └── sft/                    # SFT 훈련 설정
-│           └── pipeline.yaml       # DoRA, 학습률, model_dir (pre_stage/final) 등
+│       ├── sft/                    # SFT 훈련 설정
+│       │   └── pipeline.yaml       # DoRA, 학습률, model_dir (pre_stage/final) 등
+│       └── grpo/                   # GRPO 강화학습 설정
+│           └── pipeline.yaml       # GDPO, 보상함수(7개), 신용할당, model_dir (sft/final) 등
 │
 ├── src/                            # 핵심 모듈 (uv 패키지로 설치)
 │   ├── build_dataset/
@@ -68,6 +72,12 @@ floorplan-llm/
 │   │   └── tokenization/           # 커스텀 어휘 빌더
 │   │       ├── token_definitions.py # 토큰 목록 정의
 │   │       └── vocab_builder.py    # HuggingFace 토크나이저 확장
+│   ├── inference/                  # 추론 모듈
+│   │   ├── model_loader.py         # 모델 로드 (NF4 혼재 모델 지원)
+│   │   ├── condition_builder.py    # 입력 데이터 로드 (txt_dir/jsonl/arrow) + condition 토큰 빌드
+│   │   ├── generator.py            # model.generate() + Chat Template + EOS 처리
+│   │   ├── output_parser.py        # OUTPUT/INPUT 토큰 파싱 (상태머신 방식)
+│   │   └── result_saver.py         # 결과 저장 (토큰/JSON/이미지 + 메타데이터)
 │   └── training/
 │       ├── augmentation/           # 데이터 증강 파이프라인
 │       │   ├── pipeline.py         # 증강 파이프라인 오케스트레이터
@@ -79,9 +89,24 @@ floorplan-llm/
 │       │   ├── dataset.py          # Arrow 로드 + 증강 + Chat Template
 │       │   ├── collator.py         # Dynamic padding + label 마스킹
 │       │   └── trainer.py          # TrainingArguments + Trainer 빌드
-│       └── sft/                    # SFT 훈련 모듈
-│           ├── model_loader.py     # 로컬 pre_stage/final 로드 + DoRA 적용 + merge_dora_and_save
-│           └── trainer.py          # TrainingArguments + 표준 Trainer 빌드
+│       ├── sft/                    # SFT 훈련 모듈
+│       │   ├── model_loader.py     # 로컬 pre_stage/final 로드 + DoRA 적용 + merge_dora_and_save
+│       │   └── trainer.py          # TrainingArguments + 표준 Trainer 빌드
+│       └── grpo/                   # GRPO 강화학습 모듈
+│           ├── model_loader.py     # 로컬 sft/final 로드 + DoRA 적용 + bf16 저장
+│           ├── trainer.py          # GDPOTrainer (TRL GRPOTrainer 서브클래스)
+│           ├── dataset.py          # GRPOPromptDataset (프롬프트 + 메타데이터)
+│           ├── advantage.py        # GDPO 정규화 + 토큰 신용할당
+│           ├── rewards/            # 보상함수 모듈
+│           │   ├── parser.py       # 출력 토큰 파싱 (ParsedFloorplan)
+│           │   ├── format_reward.py   # R_format (구조 유효성)
+│           │   ├── count_reward.py    # R_count (방 개수/타입)
+│           │   ├── geometry_reward.py # R_orthogonality, R_no_overlap (직각성, 겹침)
+│           │   ├── connectivity_reward.py # R_connectivity (Hungarian matching)
+│           │   ├── spatial_reward.py    # R_spatial (8방위 정확도)
+│           │   ├── credit_assignment.py # 토큰 신용할당 (오류 페널티)
+│           │   └── __init__.py      # compute_all_rewards (7개 보상 통합)
+│           └── __init__.py          # 공개 API (GDPOTrainer, GRPOPromptDataset, merge_dora_and_save)
 │
 ├── scripts/                        # CLI 실행 진입점
 │   ├── build_dataset/
@@ -92,23 +117,30 @@ floorplan-llm/
 │   ├── build_model/
 │   │   └── tokenization/
 │   │       └── build_vocab.py      # 어휘 빌드 실행
-│   └── training/
-│       ├── augmentation/
-│       │   └── validate_augmentation.py # 증강 결과 검증
-│       ├── run_pre_stage.py        # Pre-Stage 훈련 실행
-│       └── run_sft.py              # SFT 훈련 실행 (DoRA + pre_stage/final 로드)
+│   ├── training/
+│   │   ├── augmentation/
+│   │   │   └── validate_augmentation.py # 증강 결과 검증
+│   │   ├── run_pre_stage.py        # Pre-Stage 훈련 실행
+│   │   ├── run_sft.py              # SFT 훈련 실행 (DoRA + pre_stage/final 로드)
+│   │   └── run_grpo.py             # GRPO 훈련 실행 (GDPO + 7개 보상함수 + 토큰 신용할당)
+│   └── inference/
+│       └── run_inference.py        # 추론 실행 (txt_dir/jsonl/arrow 입력, N개 출력)
 │
 ├── tests/                          # 검증 및 시각화 스크립트 (핵심 파이프라인 외)
 │   ├── build_dataset/
 │   │   └── rplan2json/
 │   │       ├── validate_jsonl.py   # JSONL 스키마 무결성 검증
 │   │       └── visualize_jsonl.py  # 평면도 JSONL 시각화
+│   ├── inference/
+│   │   └── validate_inference.py    # 추론 통합 검증 (6단계: 모델·데이터·증강·생성·파싱·저장)
 │   └── training/
 │       ├── pre_stage/
 │       │   ├── validate_resume.py          # Resume 체크포인트 복원 검증
 │       │   └── validate_save_and_load.py   # 저장/로드 후 optimizer 업데이트 정상 동작 검증
-│       └── sft/
-│           └── validate_sft.py             # SFT 통합 검증 (로드·DoRA구조·훈련·저장·Resume)
+│       ├── sft/
+│       │   └── validate_sft.py             # SFT 통합 검증 (로드·DoRA구조·훈련·저장·Resume)
+│       └── grpo/
+│           └── validate_grpo.py            # GRPO 4단계 검증 (파일·보상함수·모델·3step 훈련)
 │
 ├── data/                           # 데이터 저장소 (Git 추적 제외)
 │   ├── dataset/
@@ -124,9 +156,12 @@ floorplan-llm/
 │               ├── pre_stage/                  # Pre-Stage 체크포인트 + 최종 모델
 │               │   ├── checkpoint-*/           # 에폭별 자동 저장 체크포인트
 │               │   └── final/                  # 최종 병합 모델 (SFT 입력)
-│               └── sft/                        # SFT 체크포인트 + 최종 모델
-│                   ├── checkpoint-*/           # 에폭별 자동 저장 (adapter_model.safetensors)
-│                   └── final/                  # DoRA 병합된 최종 모델 (다음 Stage 입력)
+│               ├── sft/                        # SFT 체크포인트 + 최종 모델
+│               │   ├── checkpoint-*/           # 에폭별 자동 저장 (adapter_model.safetensors)
+│               │   └── final/                  # DoRA 병합된 최종 모델 (NF4 양자화, 다음 Stage 입력)
+│               └── grpo/                       # GRPO 체크포인트 + 최종 모델
+│                   ├── checkpoint-*/           # step별 자동 저장 (adapter_model.safetensors)
+│                   └── final/                  # DoRA 병합된 최종 모델 (bf16 clean, 추론 용)
 │
 ├── outputs/                        # Hydra 실행 로그 + 설정 스냅샷
 │   └── training/
@@ -212,13 +247,13 @@ PNG (RPLAN 데이터셋)
 [SFT] DoRA Fine-tuning         → attention/MLP 전 레이어 학습
         │
         ▼
-[Step 5] DPO → GRPO (구현 예정) → 평면도 생성 모델
+[Step 6] 추론 + 시각화          → 평면도 이미지 (txt_dir/jsonl/arrow 입력, N개 출력)
         │
         ▼
-[Step 6] 추론 + 시각화 (예정) → 평면도 이미지
+[Step 7] DPO → GRPO (구현 예정) → 평면도 생성 모델 고도화
 ```
 
-> **현재 구현 완료 범위:** Step 1 ~ Step 4, Pre-Stage, SFT
+> **현재 구현 완료 범위:** Step 1 ~ 4, Pre-Stage, SFT, Step 6 (추론 + 시각화)
 
 ---
 
@@ -440,6 +475,79 @@ uv run python tests/training/sft/validate_sft.py \
 
 ---
 
+### Step 6: 추론 + 시각화
+
+훈련된 LLM 모델에 입력 조건을 주어 평면도 토큰 시퀀스를 생성하고, 결과를 텍스트/JSON/이미지로 저장한다.
+
+**입력 모드:**
+- `jsonl_file`: 단일 JSONL 파일 (특정 plan_id 선택 가능)
+- `jsonl_dir`: JSONL 디렉토리 전체 (glob 패턴 사용)
+- `arrow`: Arrow 데이터셋 (train/val/test split 선택)
+- `txt_dir`: 이미 증강 완료된 토큰 텍스트 파일 디렉토리 (파일 1개 = 입력 조건 1개)
+
+**1대N 출력:**
+- `generation.num_outputs: 1` (기본값) → `output/` 디렉토리
+- `generation.num_outputs: N` (N>1) → `output_0/`, `output_1/`, ... 디렉토리
+
+```bash
+# 기본 실행 (JSONL 파일, 증강 적용)
+uv run python scripts/inference/run_inference.py
+
+# 텍스트 파일 입력 모드
+uv run python scripts/inference/run_inference.py input.mode=txt_dir
+
+# Arrow test split, 특정 plan_ids만
+uv run python scripts/inference/run_inference.py \
+    input.mode=arrow input.arrow_split=test \
+    'input.plan_ids=[fp_00001,fp_00005]'
+
+# 3개 출력 (sampling 모드)
+uv run python scripts/inference/run_inference.py \
+    generation.num_outputs=3 \
+    generation.do_sample=true generation.temperature=0.8
+
+# 다른 모델 사용
+uv run python scripts/inference/run_inference.py \
+    model.training_stage=grpo
+```
+
+**출력 디렉토리 구조:**
+```
+outputs/inference/{model.name}/{training_stage}/[txt_input/]{plan_id}/
+├── input/
+│   ├── tokens.txt           (조건 토큰 텍스트)
+│   ├── condition.json       (조건 구조화 dict)
+│   └── floorplan.png        (조건 시각화 이미지)
+├── output/                  (num_outputs=1)
+│   ├── tokens.txt           (생성된 토큰 텍스트)
+│   ├── floorplan.json       (파싱된 평면도)
+│   └── floorplan.png        (출력 시각화 이미지)
+├── output_0/, output_1/, ... (num_outputs>1)
+│   └── ...
+└── meta.json                (메타데이터: 토큰 수, 소요 시간, 파싱 성공 여부 등)
+```
+
+> txt_dir 모드는 별도 서브디렉토리 `txt_input/`에 저장되어 다른 입력 모드 결과와 분리됨.
+
+---
+
+### Step 6 검증: 추론 통합 검증
+
+모델 로드, 데이터 로드, 증강, 생성, 파싱, 저장을 6단계로 검증한다.
+
+```bash
+# 전체 검증 (권장)
+uv run python tests/inference/validate_inference.py
+
+# 샘플 수 변경
+uv run python tests/inference/validate_inference.py \
+    validate.num_samples=50
+```
+
+> 모든 Phase가 `[PASS]`가 출력되어야 정상.
+
+---
+
 ### Pre-Stage 검증: Resume 체크포인트 확인
 
 체크포인트의 `partial_state.pt`가 올바르게 저장되어 있는지, Resume 시 new_embed/new_lm_head 복원이 가능한지 확인한다.
@@ -578,6 +686,36 @@ model:
 | `resume.checkpoint_path` | `null` | 특정 체크포인트 경로 지정 (null이면 자동 탐색) |
 | `resume.auto_find_latest` | `true` | output_dir에서 최신 체크포인트 자동 탐색 |
 
+### `config/inference/pipeline.yaml`
+
+| 파라미터 | 기본값 | 설명 |
+|---------|--------|------|
+| `model.training_stage` | `"sft"` | 훈련 단계 (sft\|grpo 등) |
+| `input.mode` | `"jsonl_file"` | 입력 모드 (jsonl_file\|jsonl_dir\|arrow\|txt_dir) |
+| `input.jsonl_file` | 파일경로 | jsonl_file 모드: 단일 파일 |
+| `input.jsonl_dir` | `data/dataset/processed_dataset/rplan/jsonl` | jsonl_dir 모드: 디렉토리 |
+| `input.jsonl_pattern` | `"floorplans_*.jsonl"` | jsonl_dir 모드: glob 패턴 |
+| `input.arrow_dir` | `data/dataset/processed_dataset/rplan/arrow` | arrow 모드: Arrow 경로 |
+| `input.arrow_split` | `"test"` | arrow 모드: split 이름 (train\|validation\|test) |
+| `input.txt_dir` | `data/inference/input_txt` | txt_dir 모드: 텍스트 파일 디렉토리 |
+| `input.txt_pattern` | `"*.txt"` | txt_dir 모드: glob 패턴 |
+| `input.plan_ids` | `null` | 처리할 plan_id 리스트 (null이면 전체) |
+| `input.max_samples` | `30` | 최대 처리 샘플 수 (null이면 전체) |
+| `augmentation.enabled` | `true` | 데이터 증강 활성화 (txt_dir 모드에서는 무시) |
+| `augmentation.config_path` | `config/training/augmentation/sft.yaml` | 증강 설정 경로 |
+| `generation.num_outputs` | `1` | 1대N 출력 (1=단일, N>1=다중) |
+| `generation.max_new_tokens` | `2048` | 최대 생성 토큰 수 |
+| `generation.do_sample` | `false` | Greedy (false) vs Sampling (true) |
+| `generation.temperature` | `1.0` | Sampling 온도 (do_sample=true 시) |
+| `generation.top_p` | `0.95` | Nucleus sampling threshold |
+| `generation.top_k` | `50` | Top-k filtering |
+| `output.dir` | `outputs/inference` | 루트 출력 디렉토리 (실제: {dir}/{model.name}/{training_stage}/[txt_input/]) |
+| `output.save_tokens` | `true` | 토큰 텍스트 저장 |
+| `output.save_json` | `true` | JSON 저장 (indent=2) |
+| `output.save_image` | `true` | 시각화 이미지 저장 |
+| `color_map_path` | `config/build_dataset/visualize_json/color_map.yaml` | 시각화 색상 설정 |
+| `seed` | `42` | 재현성 시드 |
+
 ---
 
 ## 데이터 저장 형식
@@ -647,7 +785,8 @@ You are a floor plan generator. Given room conditions, generate complete floorpl
 | Step 4 | 데이터 증강 + 토크나이징 | ✅ 완료 |
 | Pre-Stage | 새 토큰 Embedding 워밍업 훈련 | ✅ 완료 |
 | SFT | DoRA Fine-tuning (attention/MLP 전 레이어) | ✅ 완료 |
-| Step 5 | DPO → GRPO Fine-tuning | 🔜 구현 예정 |
-| Step 6 | 추론 + 시각화 | 🔜 구현 예정 |
+| GRPO | GDPO + 토큰 신용할당 강화학습 (7개 보상함수) | ✅ 완료 |
+| Step 6 | 추론 + 시각화 (txt_dir/jsonl/arrow 입력, N개 출력) | ✅ 완료 |
+| DPO | DPO/IPO Fine-tuning | 🔜 구현 예정 |
 
 자세한 설계 내용은 [Docs.md](Docs.md)를 참고.

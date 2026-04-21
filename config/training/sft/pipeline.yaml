@@ -1,15 +1,15 @@
 # SFT(Supervised Fine-Tuning) 훈련 파이프라인 설정
-# Pre-Stage에서 워밍업된 모델을 입력으로 DoRA를 적용한 전체 레이어 fine-tuning.
-# 모델 로드 경로: HF Hub 대신 로컬 pre_stage/final 경로 사용.
+# Mod Record: 이전 구조에서는 pre_stage/final/model.safetensors를 로컬에서 직접 로드했음.
+# 새 구조에서는 HF Hub에서 NF4 base model을 로드하고 partial_state.pt를 주입하여
+# 전체 모델 저장 비용 없이 커스텀 토큰 가중치를 복원한다.
 
 model:
   user: "Qwen"
   name: "Qwen2.5-Coder-7B"
-  # HF Hub 대신 pre_stage 최종 병합 모델을 로컬에서 로드
-  # merge_and_restore()로 커스텀 토큰 가중치가 병합된 상태
-  model_dir: "data/models/${model.name}/checkpoints/pre_stage/final"
-  tokenizer_dir: "${model.model_dir}"
-  vocab_extension: "data/models/${model.name}/tokenization/vocab_extension.json"
+  hub_id: "${model.user}/${model.name}"                                         # HF Hub 전체 경로
+  pre_stage_dir: "data/models/final_checkpoints/${model.name}/pre_stage/final"        # partial_state.pt 위치
+  tokenizer_dir: "data/models/${model.name}/tokenization"                       # 확장 토크나이저 경로
+  vocab_extension: "${model.tokenizer_dir}/vocab_extension.json"
 
 quantization:
   load_in_4bit: true
@@ -69,4 +69,6 @@ training:
   seed: 42
   save_total_limit: 3
   load_best_model_at_end: true
+  # optimizer: paged_adamw_32bit는 momentum/variance를 CPU RAM으로 페이징해 GPU OOM 방지
+  optim: "paged_adamw_32bit"
   max_steps: 0                        # 0 = 전체 epoch 기반 학습

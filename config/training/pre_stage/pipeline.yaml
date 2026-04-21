@@ -62,5 +62,7 @@ training:
   save_total_limit: 3
   # 훈련 종료 시 eval_loss 기준 최고 체크포인트 가중치 복원
   load_best_model_at_end: true
+  # optimizer: paged_adamw_32bit는 momentum/variance를 CPU RAM으로 페이징해 GPU OOM 방지
+  optim: "paged_adamw_32bit"
   # 디버그용: 0이면 전체 학습
   max_steps: 0
