@@ -477,7 +477,7 @@ def _create_dummy_sft_adapter(cfg, output_dir: Path) -> bool:
     """테스트 목적으로 초기화된 SFT adapter를 생성한다.
 
     실제 SFT 훈련 없이 GRPO 멀티 어댑터 스태킹 구조 검증을 위해
-    Hub + partial_state.pt에서 모델을 로드하여 DoRA adapter를 초기화 후 저장한다.
+    Hub + partial_state.pt에서 모델을 로드하여 LoRA adapter를 초기화 후 저장한다.
 
     Args:
         cfg: GRPO pipeline DictConfig.
@@ -497,17 +497,16 @@ def _create_dummy_sft_adapter(cfg, output_dir: Path) -> bool:
         logger.info("더미 SFT adapter 생성 중 (Hub 모델 로드)...")
         base_model, tokenizer = load_model_with_partial_state(cfg, partial_state_path)
 
-        # SFT와 동일한 DoRA config 사용
-        dora_config = LoraConfig(
-            r=cfg.dora.r,
-            lora_alpha=cfg.dora.lora_alpha,
-            lora_dropout=cfg.dora.lora_dropout,
-            target_modules=list(cfg.dora.target_modules),
-            bias=cfg.dora.bias,
+        # SFT와 동일한 LoRA config 사용 (표준 LoRA, use_dora 제거)
+        lora_config = LoraConfig(
+            r=cfg.lora.r,
+            lora_alpha=cfg.lora.lora_alpha,
+            lora_dropout=cfg.lora.lora_dropout,
+            target_modules=list(cfg.lora.target_modules),
+            bias=cfg.lora.bias,
             task_type=TaskType.CAUSAL_LM,
-            use_dora=True,
         )
-        peft_model = get_peft_model(base_model, dora_config)
+        peft_model = get_peft_model(base_model, lora_config)
         peft_model.save_pretrained(str(output_dir))
         logger.info(f"더미 SFT adapter 저장 완료: {output_dir}")
         del peft_model, base_model, tokenizer

@@ -286,8 +286,18 @@ class GDPOTrainer(GRPOTrainer):
         Returns:
             수정된 출력 딕셔너리. advantages가 (B_local, T) 형태로 교체됨.
         """
-        # 부모 호출: generation + 보상 계산 + 스칼라 advantages 획득
-        output = super()._generate_and_score_completions(inputs)
+        # Mod Record: prepare_model_for_kbit_training(use_gradient_checkpointing=True)가
+        # 내부적으로 model.config.use_cache=False를 세팅한다. gradient checkpointing과
+        # KV cache는 훈련 backward에서 함께 쓸 수 없으므로 이는 정상 동작이다.
+        # 그러나 rollout generation은 autoregressive 순차 생성이므로 KV cache가 필수다.
+        # use_cache=False인 채로 generate()하면 O(n²) 연산이 발생해 극단적으로 느려진다.
+        # 따라서 generation 구간에서만 use_cache=True로 복원하고, 이후 훈련을 위해 되돌린다.
+        self.model.config.use_cache = True
+        try:
+            output = super()._generate_and_score_completions(inputs)
+        finally:
+            # 훈련 backward pass를 위해 반드시 복원 (예외 발생 시에도)
+            self.model.config.use_cache = False
 
         # 스칼라 advantages → 토큰별 advantages 변환
         output = self._apply_token_credit_assignment(output)

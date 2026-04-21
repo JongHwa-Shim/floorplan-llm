@@ -4,6 +4,9 @@ Mod Record: 이전 구조에서는 sft/final/model.safetensors(merged full model
 새 구조: HF Hub NF4 base + partial_state.pt 주입 + SFT adapter(frozen) + GRPO adapter(trainable)
 로 멀티 어댑터 스태킹 방식을 사용한다. 전체 모델 저장 없이 stage별 adapter만 축적한다.
 
+Mod Record: DoRA(use_dora=True)에서 표준 LoRA로 전환. DoRA는 unmerged inference 시
+delta_W = lora_B @ lora_A 전체 행렬(O(d²))을 materialization하여 rollout generation이 ~240× 느려짐.
+
 멀티 어댑터 스태킹 구조:
     base(NF4, frozen) + partial_state 주입
         ↓ PeftModel.from_pretrained(sft_adapter, is_trainable=False)
@@ -35,7 +38,7 @@ def load_model_and_tokenizer(cfg: DictConfig) -> tuple:
         3. GRPO adapter 추가 (trainable)
 
     Args:
-        cfg: Hydra DictConfig. cfg.model, cfg.quantization, cfg.dora 섹션을 참조한다.
+        cfg: Hydra DictConfig. cfg.model, cfg.quantization, cfg.lora 섹션을 참조한다.
 
     Returns:
         tuple:
@@ -69,8 +72,8 @@ def load_model_and_tokenizer(cfg: DictConfig) -> tuple:
     )
 
     # 3. GRPO adapter 추가 (trainable)
-    # SFT adapter와 동일한 target_modules에 독립적인 DoRA adapter를 추가
-    grpo_config = _build_dora_config(cfg.dora)
+    # SFT adapter와 동일한 target_modules에 독립적인 LoRA adapter를 추가
+    grpo_config = _build_lora_config(cfg.lora)
     model.add_adapter("grpo", grpo_config)
 
     # Mod Record: PeftModel.set_adapter("grpo")는 str만 받으며 SFT adapter를 비활성화한다.
@@ -115,24 +118,25 @@ def load_model_and_tokenizer(cfg: DictConfig) -> tuple:
     return model, tokenizer
 
 
-def _build_dora_config(dora_cfg: DictConfig) -> LoraConfig:
-    """GRPO DoRA LoraConfig를 생성한다.
+def _build_lora_config(lora_cfg: DictConfig) -> LoraConfig:
+    """GRPO 표준 LoRA LoraConfig를 생성한다.
 
     NF4 base에서 비양자화 레이어가 이미 bf16이므로 adapter도 자동으로 bf16이 된다.
 
     Args:
-        dora_cfg: dora 설정 DictConfig.
+        lora_cfg: lora 설정 DictConfig.
 
     Returns:
-        LoraConfig 인스턴스 (use_dora=True).
+        LoraConfig 인스턴스 (표준 LoRA, use_dora 기본값 False).
     """
     # Mod Record: PEFT 0.18.1은 lora_dtype 파라미터 미지원.
+    # Mod Record: use_dora=True 제거. DoRA unmerged rollout generation에서
+    # delta_W materialization(O(d²))으로 ~1.5 tok/sec → 표준 LoRA(O(r×d))로 전환.
     return LoraConfig(
-        r=dora_cfg.r,
-        lora_alpha=dora_cfg.lora_alpha,
-        lora_dropout=dora_cfg.lora_dropout,
-        target_modules=list(dora_cfg.target_modules),
-        bias=dora_cfg.bias,
+        r=lora_cfg.r,
+        lora_alpha=lora_cfg.lora_alpha,
+        lora_dropout=lora_cfg.lora_dropout,
+        target_modules=list(lora_cfg.target_modules),
+        bias=lora_cfg.bias,
         task_type=TaskType.CAUSAL_LM,
-        use_dora=True,
     )

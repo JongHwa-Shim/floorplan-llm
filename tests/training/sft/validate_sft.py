@@ -11,12 +11,12 @@
     - model.config.vocab_size == len(tokenizer) (커스텀 토큰 포함 여부)
     - vocab_extension.json base_vocab_size 대비 확장 크기 검증
     - tokenizer에 커스텀 토큰(<X:0> 등)이 실제로 등록됐는지 확인
-    - DoRA adapter 구조 검증: lora_A / lora_B / lora_magnitude_vector 생성 여부
+    - LoRA adapter 구조 검증: lora_A / lora_B 생성 여부
     - 훈련 가능 파라미터가 target_modules에만 있는지 확인
 
   Phase 2. 훈련 중 파라미터 갱신 검증 (Phase 1 모델 재사용)
-    - N step 훈련 전후 각 target layer의 DoRA 파라미터 스냅샷 비교
-    - lora_A / lora_B / lora_magnitude_vector 모두 갱신되는지
+    - N step 훈련 전후 각 target layer의 LoRA 파라미터 스냅샷 비교
+    - lora_A / lora_B 모두 갱신되는지
     - target_modules 전부(q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj)에서
       가중치 변화 확인 — 누락된 레이어 없는지
     - non-target 파라미터(frozen base weights)는 변하지 않는지
@@ -25,7 +25,7 @@
     Case 3a: 저장 검증
       - N step 훈련 후 checkpoint-N/ 디렉토리 생성 확인
       - adapter_model.safetensors 존재 확인
-      - adapter_config.json에 use_dora: true 확인
+      - adapter_config.json에 use_dora: false(또는 미존재) 확인
       - optimizer.pt 존재 확인
     Case 3b: Resume 검증
       - 새 모델 로드 → Resume → M step 추가 훈련
@@ -136,15 +136,15 @@ def load_cfg(output_dir: str, max_steps: int, pre_stage_dir: str | None = None) 
     return cfg
 
 
-# ── DoRA 파라미터 스냅샷 ────────────────────────────────────────────────────
+# ── LoRA 파라미터 스냅샷 ────────────────────────────────────────────────────
 
 def _snap_dora_params(model) -> dict[str, dict[str, torch.Tensor]]:
-    """현재 DoRA adapter 파라미터 값의 복사본을 반환한다.
+    """현재 LoRA adapter 파라미터 값의 복사본을 반환한다.
 
-    각 레이어 이름 → {lora_A, lora_B, lora_magnitude_vector} 스냅샷.
+    각 레이어 이름 → {lora_A, lora_B} 스냅샷.
 
     Args:
-        model: DoRA adapter가 적용된 PeftModelForCausalLM.
+        model: LoRA adapter가 적용된 PeftModelForCausalLM.
 
     Returns:
         {layer_name: {param_type: tensor}} 형태의 스냅샷 딕셔너리.
@@ -153,8 +153,8 @@ def _snap_dora_params(model) -> dict[str, dict[str, torch.Tensor]]:
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
-        # DoRA 파라미터: lora_A.default.weight / lora_B.default.weight / lora_magnitude_vector.default
-        if "lora_A" in name or "lora_B" in name or "lora_magnitude_vector" in name:
+        # LoRA 파라미터: lora_A.default.weight / lora_B.default.weight
+        if "lora_A" in name or "lora_B" in name:
             snap[name] = param.data.cpu().clone()
     return snap
 
@@ -187,7 +187,7 @@ def _snap_frozen_params(model) -> dict[str, torch.Tensor]:
 # ── 콜백 ──────────────────────────────────────────────────────────────────────
 
 class DoRATracker(TrainerCallback):
-    """step 종료 시 DoRA 파라미터 스냅샷을 global_step 기준으로 기록한다."""
+    """step 종료 시 LoRA 파라미터 스냅샷을 global_step 기준으로 기록한다."""
 
     def __init__(self):
         # {global_step: {param_name: tensor}}
@@ -279,7 +279,7 @@ def phase0_file_existence(pre_stage_dir: str) -> bool:
 # ── Phase 1: 모델 로드 + 구조 검증 ────────────────────────────────────────
 
 def phase1_model_structure(cfg: DictConfig) -> tuple[bool, object, object]:
-    """모델 로드 후 vocab 확장 및 DoRA 구조를 검증한다.
+    """모델 로드 후 vocab 확장 및 LoRA 구조를 검증한다.
 
     Args:
         cfg: 테스트용 DictConfig (Phase 2에서 재사용하기 위해 반환).
@@ -287,7 +287,7 @@ def phase1_model_structure(cfg: DictConfig) -> tuple[bool, object, object]:
     Returns:
         tuple:
             - passed: 검증 통과 여부.
-            - model: 로드된 DoRA 모델 (Phase 2에서 재사용).
+            - model: 로드된 LoRA 모델 (Phase 2에서 재사용).
             - tokenizer: 로드된 토크나이저 (Phase 2에서 재사용).
     """
     logger.info("")
@@ -296,7 +296,7 @@ def phase1_model_structure(cfg: DictConfig) -> tuple[bool, object, object]:
     logger.info("─" * 60)
     passed = True
 
-    # 모델 + DoRA 로드
+    # 모델 + LoRA 로드
     model, tokenizer = load_model_and_tokenizer(cfg)
 
     # ── vocab_size 검증 ──────────────────────────────────────────────────────
@@ -357,34 +357,34 @@ def phase1_model_structure(cfg: DictConfig) -> tuple[bool, object, object]:
     if not custom_ok:
         passed = False
 
-    # ── DoRA 구조 검증 ──────────────────────────────────────────────────────
-    target_modules = list(cfg.dora.target_modules)
+    # ── LoRA 구조 검증 ──────────────────────────────────────────────────────
+    target_modules = list(cfg.lora.target_modules)
 
-    # lora_A, lora_B, lora_magnitude_vector 존재 여부
+    # lora_A, lora_B 존재 여부
     dora_params = {name for name, _ in model.named_parameters() if "lora_" in name}
     if dora_params:
-        logger.info(f"[PASS] DoRA 파라미터 생성 확인 ({len(dora_params)}개)")
+        logger.info(f"[PASS] LoRA 파라미터 생성 확인 ({len(dora_params)}개)")
     else:
-        logger.error("[FAIL] DoRA 파라미터가 없음 — get_peft_model이 적용되지 않은 것으로 의심")
+        logger.error("[FAIL] LoRA 파라미터가 없음 — get_peft_model이 적용되지 않은 것으로 의심")
         passed = False
 
-    # lora_magnitude_vector 존재 여부 (DoRA 전용 파라미터 — LoRA에는 없음)
+    # lora_magnitude_vector 미존재 확인 (표준 LoRA에는 없어야 함)
     mag_params = [n for n in dora_params if "lora_magnitude_vector" in n]
-    if mag_params:
-        logger.info(f"[PASS] lora_magnitude_vector 존재 (DoRA 활성화 확인): {len(mag_params)}개")
+    if not mag_params:
+        logger.info("[PASS] lora_magnitude_vector 없음 (표준 LoRA 확인 — DoRA 아님)")
     else:
         logger.error(
-            "[FAIL] lora_magnitude_vector 없음 — use_dora=True가 적용되지 않은 것으로 의심"
+            f"[FAIL] lora_magnitude_vector 존재 ({len(mag_params)}개) — DoRA가 여전히 활성화된 것으로 의심"
         )
         passed = False
 
-    # target_modules 각각에 DoRA 파라미터가 있는지 확인
+    # target_modules 각각에 LoRA 파라미터가 있는지 확인
     for mod in target_modules:
         mod_dora = [n for n in dora_params if f".{mod}." in n]
         if mod_dora:
-            logger.info(f"[PASS] target_module '{mod}'에 DoRA 파라미터 존재: {len(mod_dora)}개")
+            logger.info(f"[PASS] target_module '{mod}'에 LoRA 파라미터 존재: {len(mod_dora)}개")
         else:
-            logger.error(f"[FAIL] target_module '{mod}'에 DoRA 파라미터 없음")
+            logger.error(f"[FAIL] target_module '{mod}'에 LoRA 파라미터 없음")
             passed = False
 
     # frozen 파라미터 확인: base weights (lora_ 없는 non-grad 파라미터) 존재
@@ -451,10 +451,9 @@ def phase2_training_update(
     snap_after = _snap_dora_params(model)
     frozen_after = _snap_frozen_params(model)
 
-    # ── DoRA 파라미터 갱신 확인 ──────────────────────────────────────────────
+    # ── LoRA 파라미터 갱신 확인 ──────────────────────────────────────────────
     updated_lora_a = []
     updated_lora_b = []
-    updated_mag = []
     not_updated = []
 
     for name in snap_before:
@@ -464,29 +463,26 @@ def phase2_training_update(
                 updated_lora_a.append(name)
             elif "lora_B" in name:
                 updated_lora_b.append(name)
-            elif "lora_magnitude_vector" in name:
-                updated_mag.append(name)
         else:
             not_updated.append(name)
 
     logger.info(f"[INFO] lora_A 갱신 수: {len(updated_lora_a)}")
     logger.info(f"[INFO] lora_B 갱신 수: {len(updated_lora_b)}")
-    logger.info(f"[INFO] lora_magnitude_vector 갱신 수: {len(updated_mag)}")
 
     if not_updated:
-        logger.error(f"[FAIL] 갱신되지 않은 DoRA 파라미터: {not_updated[:5]} ...")
+        logger.error(f"[FAIL] 갱신되지 않은 LoRA 파라미터: {not_updated[:5]} ...")
         passed = False
     else:
-        logger.info("[PASS] 모든 DoRA 파라미터 갱신 확인")
+        logger.info("[PASS] 모든 LoRA 파라미터 갱신 확인")
 
     # ── target_modules 전체 커버리지 확인 ────────────────────────────────────
-    target_modules = list(cfg.dora.target_modules)
+    target_modules = list(cfg.lora.target_modules)
     for mod in target_modules:
-        mod_updated = [n for n in (updated_lora_a + updated_lora_b + updated_mag) if f".{mod}." in n]
+        mod_updated = [n for n in (updated_lora_a + updated_lora_b) if f".{mod}." in n]
         if mod_updated:
-            logger.info(f"[PASS] '{mod}' 레이어 DoRA 파라미터 갱신 확인")
+            logger.info(f"[PASS] '{mod}' 레이어 LoRA 파라미터 갱신 확인")
         else:
-            logger.error(f"[FAIL] '{mod}' 레이어의 DoRA 파라미터가 갱신되지 않음")
+            logger.error(f"[FAIL] '{mod}' 레이어의 LoRA 파라미터가 갱신되지 않음")
             passed = False
 
     # ── frozen base weights 불변 확인 ────────────────────────────────────────
@@ -562,15 +558,15 @@ def phase3_checkpoint_and_resume(output_dir: str, pre_stage_dir: str | None) -> 
         passed = False
         return passed  # 이후 검증 불가
 
-    # adapter_config.json의 use_dora 확인
+    # adapter_config.json의 use_dora 확인 (표준 LoRA이므로 false 또는 미존재여야 함)
     adapter_config_path = ckpt_path / "adapter_config.json"
     if adapter_config_path.exists():
         with open(adapter_config_path, encoding="utf-8") as f:
             adapter_config = json.load(f)
-        if adapter_config.get("use_dora", False):
-            logger.info("[PASS] adapter_config.json에 use_dora: true 확인")
+        if not adapter_config.get("use_dora", False):
+            logger.info("[PASS] adapter_config.json에 use_dora: false 확인 (표준 LoRA)")
         else:
-            logger.error(f"[FAIL] adapter_config.json에 use_dora가 false 또는 없음: {adapter_config}")
+            logger.error(f"[FAIL] adapter_config.json에 use_dora=true — DoRA가 여전히 사용 중: {adapter_config}")
             passed = False
     else:
         logger.error(f"[FAIL] adapter_config.json 없음: {adapter_config_path}")

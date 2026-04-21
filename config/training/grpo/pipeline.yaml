@@ -18,8 +18,9 @@ quantization:
   bnb_4bit_quant_type: "nf4"
   bnb_4bit_use_double_quant: false
 
-# DoRA(Weight-Decomposed Low-Rank Adaptation) 설정 (GRPO adapter)
-dora:
+# LoRA(Low-Rank Adaptation) 설정 (GRPO adapter)
+# Mod Record: DoRA → 표준 LoRA 전환 (DoRA unmerged inference O(d²) 병목 제거)
+lora:
   r: 32
   lora_alpha: 64
   lora_dropout: 0.05

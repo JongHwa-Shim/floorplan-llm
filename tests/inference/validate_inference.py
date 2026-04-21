@@ -531,7 +531,7 @@ def _create_dummy_adapters_if_needed(cfg) -> tuple:
     dummy_dirs = []
     adapters_list = list(cfg.inference.adapters)
     sft_cfg_path = Path(_PROJECT_ROOT) / "config" / "training" / "sft" / "pipeline.yaml"
-    sft_dora_cfg = OmegaConf.load(sft_cfg_path).dora
+    sft_lora_cfg = OmegaConf.load(sft_cfg_path).lora
 
     needs_dummy = False
     for adapter_entry in adapters_list:
@@ -559,16 +559,15 @@ def _create_dummy_adapters_if_needed(cfg) -> tuple:
     logger.info("더미 adapter 생성을 위해 Hub 모델 로드 중...")
     base_model, tokenizer = load_model_with_partial_state(base_cfg, partial_state_path)
 
-    dora_config = LoraConfig(
-        r=sft_dora_cfg.r,
-        lora_alpha=sft_dora_cfg.lora_alpha,
-        lora_dropout=sft_dora_cfg.lora_dropout,
-        target_modules=list(sft_dora_cfg.target_modules),
-        bias=sft_dora_cfg.bias,
+    lora_config = LoraConfig(
+        r=sft_lora_cfg.r,
+        lora_alpha=sft_lora_cfg.lora_alpha,
+        lora_dropout=sft_lora_cfg.lora_dropout,
+        target_modules=list(sft_lora_cfg.target_modules),
+        bias=sft_lora_cfg.bias,
         task_type=TaskType.CAUSAL_LM,
-        use_dora=True,
     )
-    peft_model = get_peft_model(base_model, dora_config)
+    peft_model = get_peft_model(base_model, lora_config)
 
     OmegaConf.set_struct(cfg, False)
     new_adapters = []

@@ -17,9 +17,10 @@ quantization:
   bnb_4bit_quant_type: "nf4"
   bnb_4bit_use_double_quant: false
 
-# DoRA(Weight-Decomposed Low-Rank Adaptation) 설정
-# LoraConfig(use_dora=True)로 활성화되며, PEFT >= 0.9 필요
-dora:
+# LoRA(Low-Rank Adaptation) 설정
+# Mod Record: DoRA(use_dora=True)에서 전환. DoRA는 unmerged inference 시 O(d²) delta_W
+# materialization이 발생해 generation 속도가 ~240× 저하됨. 표준 LoRA는 O(r×d) efficient path 사용.
+lora:
   r: 32
   lora_alpha: 64
   lora_dropout: 0.05
