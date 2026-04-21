@@ -185,14 +185,47 @@ def load_vocab(
 # Arrow columnar → row-oriented 변환
 # ---------------------------------------------------------------------------
 
+def _normalize_row_oriented(sample: dict) -> dict:
+    """이미 row-oriented인 데이터의 필드 형식을 정규화한다.
+
+    JSONL 원본 데이터와 Arrow 변환 결과 간 필드 구조 차이를 통일한다:
+      - spatial: [rid_a, rid_b, direction] 리스트 → {"rid_a", "rid_b", "direction"} 딕셔너리
+      - edges: "doors" 키 → "door" 키 (증강 파이프라인이 "door" 키를 기대)
+
+    이미 정규화된 데이터에 대해 재호출해도 안전하다 (멱등성 보장).
+
+    Args:
+        sample: row-oriented 평면도 딕셔너리.
+
+    Returns:
+        정규화된 row-oriented 딕셔너리.
+    """
+    # --- spatial 정규화: list → dict ---
+    spatial = sample.get("spatial", [])
+    if spatial and isinstance(spatial[0], (list, tuple)):
+        sample["spatial"] = [
+            {"rid_a": int(sp[0]), "rid_b": int(sp[1]), "direction": str(sp[2])}
+            for sp in spatial
+        ]
+
+    # --- edges 정규화: "doors" 키 → "door" 키 ---
+    for edge in sample.get("edges", []):
+        if "doors" in edge and "door" not in edge:
+            edge["door"] = edge.pop("doors")
+
+    return sample
+
+
 def to_row_oriented(sample: dict) -> dict:
     """Arrow에서 읽어온 columnar 포맷 샘플을 row-oriented 딕셔너리로 변환한다.
 
     HuggingFace datasets는 Sequence(struct)를 struct-of-lists(columnar)로 저장한다.
     증강 및 토크나이징 편의를 위해 list-of-structs(row-oriented)로 변환한다.
 
+    이미 row-oriented인 데이터(JSONL 등)가 전달되면 그대로 반환한다 (멱등성 보장).
+
     Args:
-        sample: datasets[i]로 읽어온 raw 딕셔너리.
+        sample: datasets[i]로 읽어온 raw 딕셔너리 또는 이미 row-oriented인 딕셔너리.
 
     Returns:
         row-oriented 딕셔너리:
@@ -202,8 +235,18 @@ def to_row_oriented(sample: dict) -> dict:
             - front_door: {"x","y","w","h": float} or None
             - spatial: list of {"rid_a": int, "rid_b": int, "direction": str}
     """
-    # --- rooms ---
+    # 이미 row-oriented인 경우 (rooms가 list이면) 정규화만 수행하고 반환
+    # Columnar: sample["rooms"]는 dict ({"rid": [...], "type": [...], ...})
+    # Row-oriented: sample["rooms"]는 list ([{"rid": 0, "type": "outline", ...}, ...])
+    # Mod Record: JSONL 원본 데이터는 row-oriented이지만 필드 구조가 Arrow 변환 결과와 다름.
+    #   - spatial: [rid_a, rid_b, direction] 리스트 → {"rid_a", "rid_b", "direction"} 딕셔너리
+    #   - edges: "doors" 키 → "door" 키 (증강 파이프라인이 "door" 키를 기대)
+    #   이 정규화를 통해 JSONL/Arrow 무관하게 동일한 row-oriented 형식을 보장한다.
     rooms_raw = sample["rooms"]
+    if isinstance(rooms_raw, list):
+        return _normalize_row_oriented(sample)
+
+    # --- rooms ---
     n_rooms = len(rooms_raw["rid"])
     rooms = [
         {

@@ -1,0 +1,33 @@
+# 모델 컴포넌트 병합 설정
+# Hub NF4 base + partial_state.pt + adapter 체인을 bf16 full model로 병합한다.
+# 병합 결과는 추론 파이프라인의 load_mode="merged" 모드에서 사용된다.
+#
+# 사용법:
+#   uv run python scripts/utils/merge_model.py
+#   uv run python scripts/utils/merge_model.py merge.output_dir=data/models/.../merged/grpo
+
+model:
+  user: "Qwen"
+  name: "Qwen2.5-Coder-7B"
+  hub_id: "${model.user}/${model.name}"
+  pre_stage_dir: "data/models/${model.name}/checkpoints/pre_stage/final"
+  tokenizer_dir: "data/models/${model.name}/tokenization"
+
+quantization:
+  load_in_4bit: true
+  bnb_4bit_compute_dtype: "bfloat16"
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_use_double_quant: false
+
+merge:
+  # 병합 결과 저장 경로
+  output_dir: "data/models/${model.name}/merged/sft"
+  # 저장 dtype: "bfloat16" | "float16" | "float32"
+  output_dtype: "bfloat16"
+  # 병합할 adapter 목록 (순서대로 적용)
+  adapters:
+    - path: "data/models/${model.name}/checkpoints/sft/final"
+      name: "sft"
+    # GRPO까지 병합하려면 아래 주석 해제 + output_dir 변경:
+    # - path: "data/models/${model.name}/checkpoints/grpo/final"
+    #   name: "grpo"

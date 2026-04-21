@@ -80,8 +80,9 @@ class PartialEmbedding(nn.Module):
 
         # 새 토큰 행만 학습 가능 파라미터로 분리
         # optimizer state: num_new × H × 2(m,v) × 4bytes ≈ 16MB
+        # prepare_model_for_kbit_training이 embed_tokens를 fp32로 변환하므로 bf16 명시적 캐스팅
         self.new_embed = nn.Parameter(
-            original_embed.weight[new_ids_tensor].detach().clone()
+            original_embed.weight[new_ids_tensor].detach().clone().to(torch.bfloat16)
         )
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
@@ -167,8 +168,9 @@ class PartialLMHead(nn.Module):
         self.register_buffer("new_ids", new_ids_tensor)
 
         # 새 토큰 행만 학습 가능 파라미터로 분리
+        # prepare_model_for_kbit_training이 lm_head를 fp32로 변환하므로 bf16 명시적 캐스팅
         self.new_lm_head = nn.Parameter(
-            original_lm_head.weight[new_ids_tensor].detach().clone()
+            original_lm_head.weight[new_ids_tensor].detach().clone().to(torch.bfloat16)
         )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -269,8 +271,13 @@ def load_model_and_tokenizer(
         gradient_checkpointing_kwargs={"use_reentrant": False},
     )
 
+    # Mod Record: prepare_model_for_kbit_training은 Params4bit가 아닌 모든 파라미터를
+    # fp32로 변환한다 (embed_tokens, lm_head 포함). 이후 resize_token_embeddings로
+    # 추가되는 새 토큰 행도 fp32로 생성되므로 bf16으로 명시적 재캐스팅이 필요하다.
+    # (PartialEmbedding의 new_embed는 .to(torch.bfloat16)으로 별도 처리하므로 여기서는
+    # resize_token_embeddings 전에 호출할 필요 없음. 단 명확성을 위해 resize 후 재캐스팅.)
     # 확장 토크나이저에 맞게 embedding table 크기 조정
-    # embed_tokens, lm_head는 4bit 대상 제외(bf16)이므로 resize_token_embeddings 정상 동작
+    # embed_tokens, lm_head는 4bit 대상 제외이므로 resize_token_embeddings 정상 동작
     # resize 후 새 토큰 행은 기존 토큰 평균으로 초기화됨 (HF 기본값)
     tokenizer_vocab_size = len(tokenizer)
     model.resize_token_embeddings(tokenizer_vocab_size)
@@ -279,17 +286,117 @@ def load_model_and_tokenizer(
         f"(+{len(new_token_ids)} 커스텀 토큰)"
     )
 
+    # embed_tokens / lm_head를 bf16으로 재캐스팅
+    # (prepare_model_for_kbit_training이 fp32로 변환했으므로 되돌림)
+    model.model.embed_tokens.weight.data = model.model.embed_tokens.weight.data.to(torch.bfloat16)
+    model.lm_head.weight.data = model.lm_head.weight.data.to(torch.bfloat16)
+    logger.info("embed_tokens / lm_head: fp32 → bf16 재캐스팅 완료")
+
     # Pre-Stage 파라미터 설정: 새 토큰 행만 학습 가능하도록 모듈 교체
     _setup_partial_training(model, new_token_ids)
 
     return model, tokenizer, new_token_ids
 
 
+def load_model_with_partial_state(
+    cfg: DictConfig,
+    partial_state_path: str | Path,
+) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
+    """Hub NF4 모델을 로드하고 partial_state.pt를 embed_tokens/lm_head에 주입한다.
+
+    Pre-Stage 최종 저장 형식(partial_state.pt)에서
+    SFT/GRPO 훈련용 base model을 복원하는 공유 함수.
+
+    로드 흐름:
+        1. Hub에서 NF4 양자화로 base model 로드
+        2. resize_token_embeddings으로 vocab 확장
+        3. prepare_model_for_kbit_training + bf16 재캐스팅
+        4. partial_state.pt의 new_embed/new_lm_head를 embed_tokens/lm_head에 주입
+
+    Args:
+        cfg: Hydra DictConfig.
+            - cfg.model.hub_id: HF Hub 경로 (예: "Qwen/Qwen2.5-Coder-7B")
+            - cfg.model.tokenizer_dir: 확장 토크나이저 경로
+            - cfg.quantization: BitsAndBytes 설정 섹션
+        partial_state_path: partial_state.pt 파일 경로.
+            {"new_embed": Tensor, "new_lm_head": Tensor, "new_token_ids": list[int]}
+
+    Returns:
+        tuple:
+            - model: partial_state가 주입된 base AutoModelForCausalLM (NF4 + bf16 embed/lm_head).
+                     이 시점에는 PartialEmbedding이 아닌 일반 nn.Embedding 상태이다.
+            - tokenizer: 커스텀 토큰이 포함된 AutoTokenizer
+
+    Raises:
+        FileNotFoundError: partial_state_path 또는 tokenizer_dir이 없을 경우.
+    """
+    partial_state_path = Path(partial_state_path)
+    tokenizer_dir = Path(cfg.model.tokenizer_dir)
+
+    if not partial_state_path.exists():
+        raise FileNotFoundError(f"partial_state.pt를 찾을 수 없음: {partial_state_path}")
+    if not tokenizer_dir.exists():
+        raise FileNotFoundError(f"토크나이저 디렉토리를 찾을 수 없음: {tokenizer_dir}")
+
+    # 확장 토크나이저 로드 (커스텀 토큰 567개 포함)
+    tokenizer = AutoTokenizer.from_pretrained(str(tokenizer_dir))
+    logger.info(f"토크나이저 로드 완료. vocab size: {len(tokenizer)}")
+
+    bnb_config = _build_bnb_config(cfg.quantization)
+
+    # Hub에서 NF4로 base model 로드
+    logger.info(f"Hub에서 NF4 모델 로드: {cfg.model.hub_id}")
+    model = AutoModelForCausalLM.from_pretrained(
+        cfg.model.hub_id,
+        quantization_config=bnb_config,
+        torch_dtype=torch.bfloat16,
+        trust_remote_code=True,
+    )
+
+    # vocab 확장: 확장 토크나이저 크기에 맞게 embedding table 조정
+    tokenizer_vocab_size = len(tokenizer)
+    model.resize_token_embeddings(tokenizer_vocab_size)
+    logger.info(f"embedding table resize: → {tokenizer_vocab_size}")
+
+    # gradient checkpointing 활성화
+    model = prepare_model_for_kbit_training(
+        model,
+        use_gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
+    )
+
+    # prepare_model_for_kbit_training이 embed_tokens/lm_head를 fp32로 변환하므로 bf16 재캐스팅
+    model.model.embed_tokens.weight.data = model.model.embed_tokens.weight.data.to(torch.bfloat16)
+    model.lm_head.weight.data = model.lm_head.weight.data.to(torch.bfloat16)
+    logger.info("embed_tokens / lm_head: bf16 재캐스팅 완료")
+
+    # partial_state.pt 주입: Pre-Stage에서 훈련된 new token 행을 embed_tokens/lm_head에 복원
+    partial_state = torch.load(
+        partial_state_path, map_location="cpu", weights_only=True
+    )
+    new_token_ids = partial_state["new_token_ids"]
+    new_ids_tensor = torch.tensor(new_token_ids, dtype=torch.long)
+
+    embed_device = model.model.embed_tokens.weight.device
+    lm_head_device = model.lm_head.weight.device
+
+    with torch.no_grad():
+        model.model.embed_tokens.weight[new_ids_tensor] = (
+            partial_state["new_embed"].to(dtype=torch.bfloat16, device=embed_device)
+        )
+        model.lm_head.weight[new_ids_tensor] = (
+            partial_state["new_lm_head"].to(dtype=torch.bfloat16, device=lm_head_device)
+        )
+    logger.info(f"partial_state 주입 완료: {len(new_token_ids)}개 새 토큰 행 복원")
+
+    return model, tokenizer
+
+
 def merge_and_restore(model: AutoModelForCausalLM) -> None:
     """PartialEmbedding/PartialLMHead를 원본 모듈로 복원하고 새 가중치를 병합한다.
 
-    model.save_pretrained() 호출 전에 실행하여
-    표준 HuggingFace 형식으로 저장될 수 있도록 한다.
+    Deprecated: 최종 저장은 save_final_checkpoint()를 사용한다.
+    이 함수는 scripts/utils/extract_partial_state.py 등 병합 도구에서만 사용한다.
 
     Args:
         model: PartialEmbedding / PartialLMHead가 적용된 AutoModelForCausalLM.

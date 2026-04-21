@@ -214,6 +214,8 @@ class AugmentationPipeline:
         # 마지막 호출의 증강 내역 (검증용)
         self.last_drop_state: DropState | None = None
         self.last_applied_shuffles: list[str] = []
+        # 마지막 호출에서 변형 증강이 적용된 샘플 (추론 시 입력 조건 시각화용)
+        self.last_augmented_sample: dict | None = None
 
     def __call__(self, raw_sample: dict) -> tuple[list[int], list[int]]:
         """샘플에 증강을 적용하고 토큰 ID 시퀀스를 반환한다.
@@ -284,9 +286,10 @@ class AugmentationPipeline:
         # 좌표 노이즈 상태 계산 (INPUT 전용, sample 수정 없음)
         drop_state.noise_room_coords = compute_noise_state(sample, cfg.to_noise_params(), rng)
 
-        # 마지막 호출 내역 저장 (검증용)
+        # 마지막 호출 내역 저장 (검증용 및 추론 시 입력 시각화용)
         self.last_drop_state = drop_state
         self.last_applied_shuffles = applied_shuffles
+        self.last_augmented_sample = copy.deepcopy(sample)
 
         # 4단계: 조건(입력) 토큰 시퀀스 생성
         condition_tokens = build_condition_tokens(sample, drop_state, self.vocab)

@@ -1,23 +1,24 @@
 """SFT 모델 로드 및 DoRA 설정 모듈.
 
-Pre-Stage에서 저장된 로컬 모델(pre_stage/final)을 로드하고
-DoRA(Weight-Decomposed Low-Rank Adaptation)를 적용한다.
+Mod Record: 이전 구조에서는 pre_stage/final/model.safetensors(full model)를 로컬에서 로드했음.
+새 구조에서는 HF Hub에서 NF4 base model을 로드하고 partial_state.pt를 주입하여
+전체 모델 저장 비용 없이 커스텀 토큰 가중치를 복원한다.
 
 Pre-Stage와의 차이점:
-  - 모델 로드 출처: HF Hub → 로컬 pre_stage/final 경로
-  - resize_token_embeddings() 불필요: vocab_size가 이미 config.json에 확장 반영됨
-  - PartialEmbedding/PartialLMHead 불필요: 커스텀 토큰 가중치가 이미 model.safetensors에 병합됨
+  - 모델 로드 출처: 로컬 pre_stage/final → HF Hub + partial_state.pt 주입
   - 훈련 파라미터: 새 토큰 행 일부 → DoRA adapter (attention/MLP 전 레이어)
+  - 최종 저장: merge된 전체 모델 → adapter_model.safetensors만 저장
 """
 
 import logging
 from pathlib import Path
-from typing import List
 
 import torch
 from omegaconf import DictConfig
-from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from peft import LoraConfig, TaskType, get_peft_model
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+from src.training.pre_stage.model_loader import load_model_with_partial_state
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,11 @@ logger = logging.getLogger(__name__)
 def load_model_and_tokenizer(
     cfg: DictConfig,
 ) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
-    """로컬 pre_stage/final 모델을 로드하고 DoRA를 적용한다.
+    """HF Hub에서 NF4 base model을 로드하고 partial_state.pt를 주입한 뒤 DoRA를 적용한다.
+
+    Mod Record: 이전 구조에서는 pre_stage/final/model.safetensors를 로드하고 NF4 재양자화했음.
+    새 구조: load_model_with_partial_state()가 Hub 로드 + partial_state.pt 주입 + bf16 재캐스팅을
+    일괄 처리하므로 SFT에서는 DoRA 적용만 담당한다.
 
     Args:
         cfg: Hydra DictConfig. cfg.model, cfg.quantization, cfg.dora 섹션을 참조한다.
@@ -40,44 +45,20 @@ def load_model_and_tokenizer(
             - tokenizer: 커스텀 토큰이 포함된 AutoTokenizer
 
     Raises:
-        FileNotFoundError: model_dir 또는 tokenizer_dir가 없을 경우.
+        FileNotFoundError: pre_stage_dir 또는 partial_state.pt가 없을 경우.
     """
-    model_dir = Path(cfg.model.model_dir)
-    tokenizer_dir = Path(cfg.model.tokenizer_dir)
+    pre_stage_dir = Path(cfg.model.pre_stage_dir)
+    partial_state_path = pre_stage_dir / "partial_state.pt"
 
-    if not model_dir.exists():
-        raise FileNotFoundError(f"모델 디렉토리를 찾을 수 없음: {model_dir}")
-    if not tokenizer_dir.exists():
-        raise FileNotFoundError(f"토크나이저 디렉토리를 찾을 수 없음: {tokenizer_dir}")
+    if not pre_stage_dir.exists():
+        raise FileNotFoundError(f"pre_stage_dir를 찾을 수 없음: {pre_stage_dir}")
+    if not partial_state_path.exists():
+        raise FileNotFoundError(f"partial_state.pt를 찾을 수 없음: {partial_state_path}")
 
-    # 토크나이저 로드 (pre_stage/final에 커스텀 토큰 포함)
-    tokenizer = AutoTokenizer.from_pretrained(str(tokenizer_dir))
-    logger.info(f"토크나이저 로드 완료. vocab size: {len(tokenizer)}")
-
-    # 4bit 양자화 설정
-    bnb_config = _build_bnb_config(cfg.quantization)
-
-    # 로컬 경로에서 모델 로드
-    # pre_stage/final의 model.safetensors에는 커스텀 토큰 가중치가 이미 병합되어 있으므로
-    # resize_token_embeddings() 호출 불필요
-    logger.info(f"모델 로드 중 (로컬): {model_dir}")
-    model = AutoModelForCausalLM.from_pretrained(
-        str(model_dir),
-        quantization_config=bnb_config,
-        torch_dtype=torch.bfloat16,
-        trust_remote_code=True,
-    )
+    # Hub NF4 base + partial_state.pt 주입 (커스텀 토큰 가중치 복원)
+    logger.info(f"Hub 모델 로드 + partial_state.pt 주입: {cfg.model.hub_id}")
+    model, tokenizer = load_model_with_partial_state(cfg, partial_state_path)
     logger.info(f"모델 로드 완료. vocab_size: {model.config.vocab_size}")
-
-    # kbit 훈련 준비:
-    # - gradient checkpointing 활성화
-    # - use_reentrant=False: PyTorch 2.5+ 기본값 변경에 맞춘 명시적 설정
-    # - layernorm을 fp32로 업캐스팅 (안정적인 backward 보장)
-    model = prepare_model_for_kbit_training(
-        model,
-        use_gradient_checkpointing=True,
-        gradient_checkpointing_kwargs={"use_reentrant": False},
-    )
 
     # DoRA adapter 적용
     # use_dora=True: LoRA에서 weight magnitude를 분리하여 방향(direction)만 low-rank로 학습
@@ -91,80 +72,34 @@ def load_model_and_tokenizer(
     return model, tokenizer
 
 
-def merge_dora_and_save(
+def save_adapter_only(
     model: AutoModelForCausalLM,
-    tokenizer: AutoTokenizer,
     save_dir: str | Path,
 ) -> None:
-    """DoRA adapter를 base model에 병합하고 표준 HuggingFace 형식으로 저장한다.
+    """DoRA adapter 가중치만 저장한다 (base model 제외).
 
-    run_sft.py의 최종 저장 단계에서 호출한다.
-    저장 후 결과물은 다음 Stage 또는 추론에서 from_pretrained()로 로드 가능하다.
+    Mod Record: 이전 merge_dora_and_save()는 merge_and_unload()로 전체 모델을 저장했음.
+    새 구조에서는 GRPO도 HF Hub에서 base model을 새로 로드하므로 adapter만 저장하면 충분하다.
+    intermediate checkpoint와 동일한 구조(adapter_model.safetensors + adapter_config.json)로 저장.
 
     Args:
         model: DoRA adapter가 적용된 PeftModelForCausalLM.
-        tokenizer: 커스텀 토큰이 포함된 AutoTokenizer.
         save_dir: 저장할 디렉토리 경로.
 
     Returns:
-        없음. 디렉토리에 model.safetensors, tokenizer.json 등이 저장된다.
+        없음. adapter_model.safetensors, adapter_config.json이 저장된다.
     """
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info("DoRA adapter를 base model에 병합 중 (merge_and_unload)...")
-    merged_model = model.merge_and_unload()
-
-    # Mod Record: transformers 4.51+에서 4bit 양자화 모델에 merge_and_unload() 후
-    # save_pretrained()를 호출하면 revert_weight_conversion()이 4bit 역변환을 시도하는데,
-    # 해당 역변환(reverse_op)이 미구현 상태라 NotImplementedError가 발생한다.
-    # merge_and_unload 이후에도 transformer 레이어는 여전히 NF4 4bit 상태이며,
-    # revert_weight_conversion은 이를 원래 dtype으로 복원하려 하지만 실패함.
-    # pre_stage의 validate_quantization_for_training 패치와 동일한 방식으로
-    # modeling_utils 네임스페이스의 함수를 일시 no-op으로 교체하여 우회한다.
-    import transformers.modeling_utils as _modeling_module
-
-    _orig_revert = getattr(_modeling_module, "revert_weight_conversion", None)
-    if _orig_revert is not None:
-        _modeling_module.revert_weight_conversion = lambda m, sd: sd
-    try:
-        logger.info(f"병합된 모델 저장 중: {save_dir}")
-        merged_model.save_pretrained(str(save_dir))
-    finally:
-        if _orig_revert is not None:
-            _modeling_module.revert_weight_conversion = _orig_revert
-
-    tokenizer.save_pretrained(str(save_dir))
-    logger.info("모델 및 토크나이저 저장 완료")
+    logger.info(f"DoRA adapter 저장 중 (base model 제외): {save_dir}")
+    model.save_pretrained(str(save_dir))
+    logger.info("adapter_model.safetensors + adapter_config.json 저장 완료")
 
 
 # ---------------------------------------------------------------------------
 # 내부 헬퍼 함수
 # ---------------------------------------------------------------------------
-
-def _build_bnb_config(quant_cfg: DictConfig) -> BitsAndBytesConfig:
-    """BitsAndBytesConfig를 생성한다.
-
-    Args:
-        quant_cfg: quantization 설정 DictConfig.
-
-    Returns:
-        BitsAndBytesConfig 인스턴스.
-    """
-    compute_dtype_map = {
-        "bfloat16": torch.bfloat16,
-        "float16": torch.float16,
-        "float32": torch.float32,
-    }
-    compute_dtype = compute_dtype_map[quant_cfg.bnb_4bit_compute_dtype]
-
-    return BitsAndBytesConfig(
-        load_in_4bit=quant_cfg.load_in_4bit,
-        bnb_4bit_compute_dtype=compute_dtype,
-        bnb_4bit_quant_type=quant_cfg.bnb_4bit_quant_type,
-        bnb_4bit_use_double_quant=quant_cfg.bnb_4bit_use_double_quant,
-    )
-
 
 def _build_dora_config(dora_cfg: DictConfig) -> LoraConfig:
     """DoRA LoraConfig를 생성한다.
@@ -172,6 +107,7 @@ def _build_dora_config(dora_cfg: DictConfig) -> LoraConfig:
     use_dora=True로 설정하면 PEFT가 DoRA 방식으로 adapter를 적용한다.
     DoRA는 weight를 magnitude와 direction으로 분리하여 direction만 low-rank로 학습하므로
     일반 LoRA 대비 full fine-tuning에 가까운 학습 품질을 제공한다.
+    NF4 base에서 비양자화 레이어가 이미 bf16이므로 adapter도 자동으로 bf16이 된다.
 
     Args:
         dora_cfg: dora 설정 DictConfig (r, lora_alpha, lora_dropout, target_modules, bias).
@@ -179,6 +115,8 @@ def _build_dora_config(dora_cfg: DictConfig) -> LoraConfig:
     Returns:
         LoraConfig 인스턴스 (use_dora=True).
     """
+    # Mod Record: PEFT 0.18.1은 lora_dtype 파라미터 미지원. NF4 base의 비양자화 레이어가
+    # bf16이므로 adapter 가중치도 자동으로 bf16으로 생성된다.
     return LoraConfig(
         r=dora_cfg.r,
         lora_alpha=dora_cfg.lora_alpha,
