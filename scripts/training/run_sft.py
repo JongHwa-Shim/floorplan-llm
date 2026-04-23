@@ -1,6 +1,6 @@
 """SFT(Supervised Fine-Tuning) 훈련 실행 스크립트.
 
-Pre-Stage에서 워밍업된 로컬 모델(pre_stage/final)에 DoRA를 적용하여
+Pre-Stage에서 워밍업된 로컬 모델(pre_stage/final)에 LoRA를 적용하여
 전체 attention/MLP 레이어를 fine-tuning하는 단계.
 
 사용법:
@@ -46,7 +46,7 @@ from src.training.sft import (
     SFTDataset,
     build_trainer,
     load_model_and_tokenizer,
-    merge_dora_and_save,
+    merge_lora_and_save,
 )
 
 logger = logging.getLogger(__name__)
@@ -157,7 +157,7 @@ def main(cfg: DictConfig) -> None:
     # Resume 체크포인트 경로 결정
     resume_checkpoint = _resolve_checkpoint(cfg)
 
-    # 모델 + 토크나이저 로드 (로컬 pre_stage/final + DoRA 적용)
+    # 모델 + 토크나이저 로드 (로컬 pre_stage/final + LoRA 적용)
     logger.info("모델 및 토크나이저 로드 중...")
     model, tokenizer = load_model_and_tokenizer(cfg)
 
@@ -194,14 +194,14 @@ def main(cfg: DictConfig) -> None:
     trainer.log_metrics("eval", eval_metrics)
     trainer.save_metrics("eval", eval_metrics)
 
-    # DoRA adapter를 base model에 병합하고 표준 HuggingFace 형식으로 저장
+    # LoRA adapter를 base model에 병합하고 표준 HuggingFace 형식으로 저장
     # 저장 결과는 다음 Stage 또는 추론에서 from_pretrained()로 직접 로드 가능
     output_dir = Path(cfg.training.output_dir) / "final"
-    logger.info(f"DoRA 병합 및 모델 저장 중: {output_dir}")
+    logger.info(f"LoRA 병합 및 모델 저장 중: {output_dir}")
     # DDP에서는 trainer.model이 DistributedDataParallel로 래핑되어 있으므로
     # accelerator.unwrap_model()로 실제 PeftModel을 추출한 뒤 merge_and_unload
     raw_model = trainer.accelerator.unwrap_model(trainer.model)
-    merge_dora_and_save(raw_model, tokenizer, output_dir)
+    merge_lora_and_save(raw_model, tokenizer, output_dir)
 
     logger.info("=== SFT 훈련 완료 ===")
 

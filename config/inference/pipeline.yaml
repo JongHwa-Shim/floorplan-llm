@@ -1,0 +1,81 @@
+# 추론 파이프라인 설정
+# Mod Record: 이전 구조에서는 merged full model만 지원했음.
+# 새 구조에서는 load_mode로 분기:
+#   "adapters": Hub NF4 + partial_state.pt + adapter 체인 (stage별 adapter 스태킹)
+#   "merged":   pre-merged full model 직접 로드 (merge_model.py 유틸로 사전 생성)
+
+model:
+  user: "Qwen"
+  name: "Qwen2.5-Coder-7B"
+  hub_id: "${model.user}/${model.name}"                                         # adapters 모드용 HF Hub 경로
+  pre_stage_dir: "data/models/${model.name}/checkpoints/pre_stage/final"        # adapters 모드용 partial_state.pt 위치
+  tokenizer_dir: "data/models/${model.name}/tokenization"                       # 확장 토크나이저 경로
+  vocab_extension: "${model.tokenizer_dir}/vocab_extension.json"
+  # merged 모드용 (merge_model.py로 사전 생성된 경로)
+  model_dir: "data/models/${model.name}/merged/sft"
+
+quantization:
+  load_in_4bit: true
+  bnb_4bit_compute_dtype: "bfloat16"
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_use_double_quant: false
+
+# 추론 모드 설정
+inference:
+  # "adapters": Hub + partial_state + adapter 체인 (권장, adapter 파일만 필요)
+  # "merged":   pre-merged full model 로드 (merge_model.py 유틸로 사전 생성 필요)
+  load_mode: "adapters"
+
+  # adapters 모드에서 적재할 adapter 목록 (순서대로 적용)
+  # 중간 adapter는 base에 merge되고, 마지막 adapter만 PeftModel로 유지됨
+  adapters:
+    - path: "data/models/${model.name}/checkpoints/sft/final"
+      name: "sft"
+    # GRPO까지 적용하려면 아래 주석 해제:
+    # - path: "data/models/${model.name}/checkpoints/grpo/final"
+    #   name: "grpo"
+
+# 입력 설정
+input:
+  # "jsonl_file": 단일 JSONL 파일에서 특정 plan_id들을 읽음
+  # "jsonl_dir":  JSONL 디렉토리 전체 처리
+  # "arrow":      Arrow 데이터셋에서 특정 split 사용
+  # "txt_dir":    증강 완료된 토큰 텍스트 파일 디렉토리 (파일 1개 = 입력 조건 1개)
+  mode: "jsonl_file"
+  jsonl_file: "data/dataset/processed_dataset/rplan/jsonl/floorplans_0000.jsonl"
+  jsonl_dir: "data/dataset/processed_dataset/rplan/jsonl"
+  jsonl_pattern: "floorplans_*.jsonl"
+  arrow_dir: "data/dataset/processed_dataset/rplan/arrow"
+  arrow_split: "test"
+  txt_dir: "data/inference/input_txt"
+  txt_pattern: "*.txt"
+  plan_ids: null
+  max_samples: 30
+
+# 증강 설정 (훈련 시와 동일한 AugmentationPipeline 사용)
+augmentation:
+  enabled: true
+  config_path: "config/training/augmentation/sft.yaml"
+
+# 출력 설정
+output:
+  dir: "outputs/inference"
+  save_tokens: true
+  save_json: true
+  save_image: true
+
+# 생성 파라미터
+generation:
+  max_new_tokens: 2048
+  do_sample: true
+  temperature: 1.0
+  top_p: 0.95
+  top_k: 50
+  num_beams: 1
+  repetition_penalty: 1.0
+  num_outputs: 2
+
+# 시각화 색상 설정
+color_map_path: "config/build_dataset/visualize_json/color_map.yaml"
+
+seed: 42

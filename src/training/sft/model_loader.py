@@ -1,13 +1,13 @@
-"""SFT 모델 로드 및 DoRA 설정 모듈.
+"""SFT 모델 로드 및 LoRA 설정 모듈.
 
 Pre-Stage에서 저장된 로컬 모델(pre_stage/final)을 로드하고
-DoRA(Weight-Decomposed Low-Rank Adaptation)를 적용한다.
+LoRA(Low-Rank Adaptation)를 적용한다.
 
 Pre-Stage와의 차이점:
   - 모델 로드 출처: HF Hub → 로컬 pre_stage/final 경로
   - resize_token_embeddings() 불필요: vocab_size가 이미 config.json에 확장 반영됨
   - PartialEmbedding/PartialLMHead 불필요: 커스텀 토큰 가중치가 이미 model.safetensors에 병합됨
-  - 훈련 파라미터: 새 토큰 행 일부 → DoRA adapter (attention/MLP 전 레이어)
+  - 훈련 파라미터: 새 토큰 행 일부 → LoRA adapter (attention/MLP 전 레이어)
 """
 
 import logging
@@ -29,14 +29,14 @@ logger = logging.getLogger(__name__)
 def load_model_and_tokenizer(
     cfg: DictConfig,
 ) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
-    """로컬 pre_stage/final 모델을 로드하고 DoRA를 적용한다.
+    """로컬 pre_stage/final 모델을 로드하고 LoRA를 적용한다.
 
     Args:
-        cfg: Hydra DictConfig. cfg.model, cfg.quantization, cfg.dora 섹션을 참조한다.
+        cfg: Hydra DictConfig. cfg.model, cfg.quantization, cfg.lora 섹션을 참조한다.
 
     Returns:
         tuple:
-            - model: DoRA adapter가 적용된 PeftModelForCausalLM
+            - model: LoRA adapter가 적용된 PeftModelForCausalLM
             - tokenizer: 커스텀 토큰이 포함된 AutoTokenizer
 
     Raises:
@@ -79,10 +79,8 @@ def load_model_and_tokenizer(
         gradient_checkpointing_kwargs={"use_reentrant": False},
     )
 
-    # DoRA adapter 적용
-    # use_dora=True: LoRA에서 weight magnitude를 분리하여 방향(direction)만 low-rank로 학습
-    # 이는 일반 LoRA 대비 학습 안정성 및 수렴 품질 향상
-    lora_config = _build_dora_config(cfg.dora)
+    # LoRA adapter 적용
+    lora_config = _build_lora_config(cfg.lora)
     model = get_peft_model(model, lora_config)
 
     # 훈련 가능 파라미터 수 출력
@@ -91,18 +89,18 @@ def load_model_and_tokenizer(
     return model, tokenizer
 
 
-def merge_dora_and_save(
+def merge_lora_and_save(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
     save_dir: str | Path,
 ) -> None:
-    """DoRA adapter를 base model에 병합하고 표준 HuggingFace 형식으로 저장한다.
+    """LoRA adapter를 base model에 병합하고 표준 HuggingFace 형식으로 저장한다.
 
     run_sft.py의 최종 저장 단계에서 호출한다.
     저장 후 결과물은 다음 Stage 또는 추론에서 from_pretrained()로 로드 가능하다.
 
     Args:
-        model: DoRA adapter가 적용된 PeftModelForCausalLM.
+        model: LoRA adapter가 적용된 PeftModelForCausalLM.
         tokenizer: 커스텀 토큰이 포함된 AutoTokenizer.
         save_dir: 저장할 디렉토리 경로.
 
@@ -112,7 +110,7 @@ def merge_dora_and_save(
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info("DoRA adapter를 base model에 병합 중 (merge_and_unload)...")
+    logger.info("LoRA adapter를 base model에 병합 중 (merge_and_unload)...")
     merged_model = model.merge_and_unload()
 
     # Mod Record: transformers 4.51+에서 4bit 양자화 모델에 merge_and_unload() 후
@@ -166,25 +164,21 @@ def _build_bnb_config(quant_cfg: DictConfig) -> BitsAndBytesConfig:
     )
 
 
-def _build_dora_config(dora_cfg: DictConfig) -> LoraConfig:
-    """DoRA LoraConfig를 생성한다.
-
-    use_dora=True로 설정하면 PEFT가 DoRA 방식으로 adapter를 적용한다.
-    DoRA는 weight를 magnitude와 direction으로 분리하여 direction만 low-rank로 학습하므로
-    일반 LoRA 대비 full fine-tuning에 가까운 학습 품질을 제공한다.
+def _build_lora_config(lora_cfg: DictConfig) -> LoraConfig:
+    """LoRA LoraConfig를 생성한다.
 
     Args:
-        dora_cfg: dora 설정 DictConfig (r, lora_alpha, lora_dropout, target_modules, bias).
+        lora_cfg: lora 설정 DictConfig (r, lora_alpha, lora_dropout, target_modules, bias).
 
     Returns:
-        LoraConfig 인스턴스 (use_dora=True).
+        LoraConfig 인스턴스.
     """
     return LoraConfig(
-        r=dora_cfg.r,
-        lora_alpha=dora_cfg.lora_alpha,
-        lora_dropout=dora_cfg.lora_dropout,
-        target_modules=list(dora_cfg.target_modules),
-        bias=dora_cfg.bias,
+        r=lora_cfg.r,
+        lora_alpha=lora_cfg.lora_alpha,
+        lora_dropout=lora_cfg.lora_dropout,
+        target_modules=list(lora_cfg.target_modules),
+        bias=lora_cfg.bias,
         task_type=TaskType.CAUSAL_LM,
-        use_dora=True,
+        use_dora=False,
     )
