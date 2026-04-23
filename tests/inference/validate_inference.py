@@ -521,8 +521,7 @@ def _create_dummy_adapters_if_needed(cfg) -> tuple:
     """
     import tempfile
     from peft import LoraConfig, TaskType, get_peft_model
-    from src.training.pre_stage.model_loader import load_model_with_partial_state
-    from src.training.sft import load_model_and_tokenizer as _unused  # noqa: F401
+    from src.inference.model_loader import _load_base_with_partial_state
 
     load_mode = cfg.inference.get("load_mode", "merged")
     if load_mode != "adapters":
@@ -546,7 +545,7 @@ def _create_dummy_adapters_if_needed(cfg) -> tuple:
     # 모델을 한 번 로드해서 모든 누락된 adapter를 생성
     partial_state_path = Path(_PROJECT_ROOT) / str(cfg.model.pre_stage_dir) / "partial_state.pt"
 
-    # cfg를 SFT-호환 형식으로 복제 (load_model_with_partial_state용)
+    # cfg를 _load_base_with_partial_state 호출용 최소 형식으로 복제
     from omegaconf import DictConfig as _DictConfig
     base_cfg = OmegaConf.create({
         "model": {
@@ -557,7 +556,7 @@ def _create_dummy_adapters_if_needed(cfg) -> tuple:
     })
 
     logger.info("더미 adapter 생성을 위해 Hub 모델 로드 중...")
-    base_model, tokenizer = load_model_with_partial_state(base_cfg, partial_state_path)
+    base_model, tokenizer = _load_base_with_partial_state(base_cfg, partial_state_path)
 
     lora_config = LoraConfig(
         r=sft_lora_cfg.r,

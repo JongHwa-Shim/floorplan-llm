@@ -68,20 +68,22 @@ floorplan-llm/
 │   │   └── tokenization/           # 커스텀 어휘 빌더
 │   │       ├── token_definitions.py # 토큰 목록 정의
 │   │       └── vocab_builder.py    # HuggingFace 토크나이저 확장
-│   └── training/
-│       ├── augmentation/           # 데이터 증강 파이프라인
-│       │   ├── pipeline.py         # 증강 파이프라인 오케스트레이터
-│       │   ├── strategies.py       # 15+ 증강 전략 구현
-│       │   ├── tokenizer.py        # 조건/정답 토큰 시퀀스 생성
-│       │   └── decoder.py          # 토큰 → 텍스트 디코딩
-│       ├── pre_stage/              # Pre-Stage 훈련 모듈
-│       │   ├── model_loader.py     # 4bit 양자화 로드 + PartialEmbedding/PartialLMHead
-│       │   ├── dataset.py          # Arrow 로드 + 증강 + Chat Template
-│       │   ├── collator.py         # Dynamic padding + label 마스킹
-│       │   └── trainer.py          # TrainingArguments + Trainer 빌드
-│       └── sft/                    # SFT 훈련 모듈
-│           ├── model_loader.py     # HF Hub base model + partial_state.pt 가중치 주입 + LoRA 적용
-│           └── trainer.py          # TrainingArguments + 표준 Trainer 빌드
+│   ├── training/
+│   │   ├── augmentation/           # 데이터 증강 파이프라인
+│   │   │   ├── pipeline.py         # 증강 파이프라인 오케스트레이터
+│   │   │   ├── strategies.py       # 15+ 증강 전략 구현
+│   │   │   ├── tokenizer.py        # 조건/정답 토큰 시퀀스 생성
+│   │   │   └── decoder.py          # 토큰 → 텍스트 디코딩
+│   │   ├── pre_stage/              # Pre-Stage 훈련 모듈
+│   │   │   ├── model_loader.py     # 4bit 양자화 로드 + PartialEmbedding/PartialLMHead
+│   │   │   ├── dataset.py          # Arrow 로드 + 증강 + Chat Template
+│   │   │   ├── collator.py         # Dynamic padding + label 마스킹
+│   │   │   └── trainer.py          # TrainingArguments + Trainer 빌드
+│   │   └── sft/                    # SFT 훈련 모듈
+│   │       ├── model_loader.py     # HF Hub base model + partial_state.pt 가중치 주입 + LoRA 적용
+│   │       └── trainer.py          # TrainingArguments + 표준 Trainer 빌드
+│   └── utils/                      # 범용 유틸리티
+│       └── extract_partial_state.py  # merged model.safetensors → partial_state.pt 추출
 │
 ├── scripts/                        # CLI 실행 진입점
 │   ├── build_dataset/
@@ -92,23 +94,27 @@ floorplan-llm/
 │   ├── build_model/
 │   │   └── tokenization/
 │   │       └── build_vocab.py      # 어휘 빌드 실행
-│   └── training/
-│       ├── augmentation/
-│       │   └── validate_augmentation.py # 증강 결과 검증
-│       ├── run_pre_stage.py        # Pre-Stage 훈련 실행
-│       └── run_sft.py              # SFT 훈련 실행 (HF Hub + partial_state.pt + LoRA adapter 저장)
+│   ├── training/
+│   │   ├── augmentation/
+│   │   │   └── validate_augmentation.py # 증강 결과 검증
+│   │   ├── run_pre_stage.py        # Pre-Stage 훈련 실행
+│   │   └── run_sft.py              # SFT 훈련 실행 (HF Hub + partial_state.pt + LoRA adapter 저장)
+│   └── utils/
+│       └── extract_partial_state.py  # merged model.safetensors → partial_state.pt 추출 CLI
 │
 ├── tests/                          # 검증 및 시각화 스크립트 (핵심 파이프라인 외)
 │   ├── build_dataset/
 │   │   └── rplan2json/
 │   │       ├── validate_jsonl.py   # JSONL 스키마 무결성 검증
 │   │       └── visualize_jsonl.py  # 평면도 JSONL 시각화
-│   └── training/
-│       ├── pre_stage/
-│       │   ├── validate_resume.py          # Resume 체크포인트 복원 검증
-│       │   └── validate_save_and_load.py   # 저장/로드 후 optimizer 업데이트 정상 동작 검증
-│       └── sft/
-│           └── validate_sft.py             # SFT 통합 검증 (로드·LoRA구조·훈련·저장·Resume)
+│   ├── training/
+│   │   ├── pre_stage/
+│   │   │   ├── validate_resume.py          # Resume 체크포인트 복원 검증
+│   │   │   └── validate_save_and_load.py   # 저장/로드 후 optimizer 업데이트 정상 동작 검증
+│   │   └── sft/
+│   │       └── validate_sft.py             # SFT 통합 검증 (로드·LoRA구조·훈련·저장·Resume)
+│   └── utils/
+│       └── test_extract_partial_state.py   # extract_partial_state 단위/통합 검증
 │
 ├── data/                           # 데이터 저장소 (Git 추적 제외)
 │   ├── dataset/
@@ -418,6 +424,38 @@ data/models/{model.name}/checkpoints/sft/
     ├── scheduler.pt
     ├── trainer_state.json
     └── tokenizer.json 등
+```
+
+---
+
+### 유틸리티: merged model.safetensors → partial_state.pt 추출
+
+Pre-Stage 저장 방식 변경 전(구 `merge_and_restore` 방식)에 저장된 `model.safetensors`에서
+커스텀 토큰 가중치만 분리하여 현재 코드와 호환되는 `partial_state.pt`를 생성한다.
+
+```bash
+# 기본 실행 (출력: {checkpoint_dir}/partial_state_extracted.pt, 기존 파일 덮어쓰기 방지)
+uv run python scripts/utils/extract_partial_state.py \
+    --checkpoint_dir data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/final \
+    --model_name Qwen2.5-Coder-7B
+
+# SFT 입력 경로(final_checkpoints/pre_stage)로 직접 추출 + bfloat16 변환
+uv run python scripts/utils/extract_partial_state.py \
+    --checkpoint_dir data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/final \
+    --model_name Qwen2.5-Coder-7B \
+    --output_path data/models/Qwen2.5-Coder-7B/final_checkpoints/pre_stage/partial_state.pt \
+    --dtype bfloat16
+
+# vocab_extension.json 경로 직접 지정
+uv run python scripts/utils/extract_partial_state.py \
+    --checkpoint_dir /path/to/checkpoint \
+    --vocab_extension_path /path/to/vocab_extension.json \
+    --output_path /path/to/partial_state.pt
+```
+
+추출 결과 검증:
+```bash
+uv run python tests/utils/test_extract_partial_state.py
 ```
 
 ---

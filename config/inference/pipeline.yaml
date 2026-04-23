@@ -8,11 +8,12 @@ model:
   user: "Qwen"
   name: "Qwen2.5-Coder-7B"
   hub_id: "${model.user}/${model.name}"                                         # adapters 모드용 HF Hub 경로
-  pre_stage_dir: "data/models/${model.name}/checkpoints/pre_stage/final"        # adapters 모드용 partial_state.pt 위치
+  pre_stage_dir: "data/models/${model.name}/final_checkpoints/pre_stage"        # adapters 모드용 partial_state.pt 위치
   tokenizer_dir: "data/models/${model.name}/tokenization"                       # 확장 토크나이저 경로
   vocab_extension: "${model.tokenizer_dir}/vocab_extension.json"
   # merged 모드용 (merge_model.py로 사전 생성된 경로)
-  model_dir: "data/models/${model.name}/merged/sft"
+  model_dir: "data/models/${model.name}/merged_checkpoints"
+  training_stage: "sft"                                                         # 출력 경로 레이블 전용
 
 quantization:
   load_in_4bit: true
@@ -27,13 +28,15 @@ inference:
   load_mode: "adapters"
 
   # adapters 모드에서 적재할 adapter 목록 (순서대로 적용)
-  # 중간 adapter는 base에 merge되고, 마지막 adapter만 PeftModel로 유지됨
-  adapters:
-    - path: "data/models/${model.name}/checkpoints/sft/final"
-      name: "sft"
-    # GRPO까지 적용하려면 아래 주석 해제:
-    # - path: "data/models/${model.name}/checkpoints/grpo/final"
-    #   name: "grpo"
+  # 모든 adapter는 merge 없이 named adapter로 유지됨 (PEFT load_adapter API 사용)
+  # 비어있으면 partial_state만 주입된 pre-stage base model로 추론
+  adapters: []
+  # 예시:
+  #   - path: "data/models/${model.name}/final_checkpoints/sft"
+  #     name: "sft"
+  # GRPO까지 적용하려면:
+  #   - path: "data/models/${model.name}/final_checkpoints/grpo"
+  #     name: "grpo"
 
 # 입력 설정
 input:
@@ -49,7 +52,7 @@ input:
   arrow_split: "test"
   txt_dir: "data/inference/input_txt"
   txt_pattern: "*.txt"
-  plan_ids: null
+  plan_ids: null # JSONL 모드에서 처리할 plan_id 리스트 (null이면 전체 처리)
   max_samples: 30
 
 # 증강 설정 (훈련 시와 동일한 AugmentationPipeline 사용)

@@ -667,6 +667,35 @@ You are a floor plan generator. Given room conditions, generate complete floorpl
 | `config/training/augmentation/pre_stage.yaml` | Pre-Stage용 증강 파라미터 (Hydra config group, `cfg.augmentation`으로 병합) |
 | `tests/training/pre_stage/validate_resume.py` | Resume 체크포인트 검증 스크립트 (partial_state.pt 존재/형태/복원 확인) |
 | `tests/training/pre_stage/validate_save_and_load.py` | 저장/로드 후 optimizer 업데이트 정상 동작 검증 (체크포인트 저장 후 훈련이 계속 진행되는지 2-case 검증) |
+| `src/utils/extract_partial_state.py` | 구 포맷 `model.safetensors`에서 커스텀 토큰 가중치만 추출하는 핵심 로직 |
+| `scripts/utils/extract_partial_state.py` | 위 추출 로직의 argparse CLI 진입점 |
+| `tests/utils/test_extract_partial_state.py` | 합성 단위 + 실제 파일 통합 검증 (2-Phase) |
+
+### 레거시 체크포인트에서 partial_state.pt 추출
+
+Pre-Stage 저장 방식 변경 이전에는 훈련 완료 후 `merge_and_restore()` → `save_pretrained()`를 호출하여 frozen base 가중치와 훈련된 커스텀 토큰 가중치를 단일 `model.safetensors`로 병합 저장했다.
+
+이 파일에서 새 토큰 행만 분리하면 현재 코드와 완전히 호환되는 `partial_state.pt`를 복원할 수 있다.
+
+**추출 원리:**
+
+```
+model.safetensors
+├── model.embed_tokens.weight  (new_vocab_size, hidden)  ← 전체 vocab 포함
+├── lm_head.weight             (new_vocab_size, hidden)  ← 전체 vocab 포함
+└── (transformer layers — quantized, 불필요)
+
+↓ new_token_ids(= base_vocab_size 이상인 ID) 행만 슬라이싱
+
+partial_state.pt
+├── "new_embed"       (num_new, hidden)  = embed_tokens.weight[new_token_ids]
+├── "new_lm_head"     (num_new, hidden)  = lm_head.weight[new_token_ids]
+└── "new_token_ids"   list[int]
+```
+
+`new_token_ids`는 `vocab_extension.json`의 `base_vocab_size`를 기준으로 결정한다 (`token_id >= base_vocab_size`인 ID 정렬). 이 로직은 Pre-Stage `model_loader.py`의 `_load_new_token_ids()`와 동일하다.
+
+**safetensors 로드 방식:** 전체 파일을 메모리에 올리지 않고 `safetensors.safe_open()`으로 `embed_tokens`, `lm_head` 두 텐서만 읽는다. sharded 포맷(`model.safetensors.index.json`)도 지원한다.
 
 ### 체크포인트 및 출력
 
