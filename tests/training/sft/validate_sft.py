@@ -131,7 +131,7 @@ def load_cfg(output_dir: str, max_steps: int, model_dir: str | None = None) -> D
 
     if model_dir is not None:
         cfg.model.model_dir = model_dir
-        cfg.model.tokenizer_dir = model_dir
+        # tokenizer_dir는 pipeline.yaml의 고정 경로(tokenization/)를 그대로 사용
 
     OmegaConf.set_struct(cfg, True)
     return cfg
@@ -244,10 +244,9 @@ def phase0_file_existence(model_dir: str) -> bool:
     model_path = Path(model_dir)
     passed = True
 
-    # 필수 파일 목록
+    # 필수 파일 목록 (partial_state.pt 방식: model.safetensors 없음)
     required_files = [
-        "model.safetensors",
-        "config.json",
+        "partial_state.pt",
         "tokenizer.json",
         "tokenizer_config.json",
     ]
@@ -641,25 +640,22 @@ def phase3_checkpoint_and_resume(output_dir: str, model_dir: str | None) -> bool
     else:
         logger.warning(f"[WARN] trainer_state.json 없음: {trainer_state_path}")
 
-    # ── Case 3c: merge_lora_and_save 최종 병합 저장 검증 ─────────────────────
+    # ── Case 3c: 최종 adapter 저장 검증 ─────────────────────────────────────
     # run_sft.py의 마지막 단계를 검증한다.
-    # validate_sft.py 초기 구현에서 누락됐던 항목:
-    # Phase 3a/3b는 adapter 체크포인트 저장(Trainer 자동)만 검증하고
-    # merge_and_unload() → save_pretrained() 경로를 실행하지 않아
-    # 실제 run_sft.py 실행 시에야 NotImplementedError가 발견됨.
-    logger.info("[Case 3c] merge_lora_and_save 최종 병합 저장 검증...")
-    from src.training.sft.model_loader import merge_lora_and_save
-
+    # merge하지 않고 adapter_model.safetensors + optimizer.pt 등을 저장하는 방식 검증.
+    logger.info("[Case 3c] 최종 adapter 저장 검증...")
     final_save_dir = Path(output_dir) / "final"
+    final_save_dir.mkdir(parents=True, exist_ok=True)
     try:
-        merge_lora_and_save(model_3b, tokenizer_3b, final_save_dir)
+        model_3b.save_pretrained(str(final_save_dir))   # adapter_model.safetensors + adapter_config.json
+        tokenizer_3b.save_pretrained(str(final_save_dir))
     except Exception as e:
-        logger.error(f"[FAIL] merge_lora_and_save 실패: {e}")
+        logger.error(f"[FAIL] adapter 저장 실패: {e}")
         passed = False
         return passed
 
     # 저장된 파일 존재 확인
-    required_final_files = ["model.safetensors", "config.json", "tokenizer.json"]
+    required_final_files = ["adapter_model.safetensors", "adapter_config.json", "tokenizer.json"]
     for fname in required_final_files:
         fpath = final_save_dir / fname
         if fpath.exists():

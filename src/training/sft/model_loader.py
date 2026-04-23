@@ -1,13 +1,14 @@
 """SFT 모델 로드 및 LoRA 설정 모듈.
 
-Pre-Stage에서 저장된 로컬 모델(pre_stage/final)을 로드하고
-LoRA(Low-Rank Adaptation)를 적용한다.
+HF Hub에서 base model을 로드하고, pre_stage/final의 partial_state.pt로 커스텀 토큰 가중치를
+적용한 뒤 LoRA(Low-Rank Adaptation)를 적용한다.
 
-Pre-Stage와의 차이점:
-  - 모델 로드 출처: HF Hub → 로컬 pre_stage/final 경로
-  - resize_token_embeddings() 불필요: vocab_size가 이미 config.json에 확장 반영됨
-  - PartialEmbedding/PartialLMHead 불필요: 커스텀 토큰 가중치가 이미 model.safetensors에 병합됨
-  - 훈련 파라미터: 새 토큰 행 일부 → LoRA adapter (attention/MLP 전 레이어)
+Pre-Stage resume과 유사한 패턴:
+  - 모델 로드 출처: HF Hub (cfg.model.hub_id)
+  - resize_token_embeddings(): 커스텀 토큰 수만큼 vocab 확장
+  - partial_state.pt 적용: embed_tokens / lm_head의 새 토큰 행에 훈련된 가중치 덮어쓰기
+  - PartialEmbedding/PartialLMHead 불필요: 가중치를 standard 레이어에 직접 주입 후 freeze
+  - 훈련 파라미터: LoRA adapter (attention/MLP 전 레이어)만 학습
 """
 
 import logging
@@ -29,7 +30,13 @@ logger = logging.getLogger(__name__)
 def load_model_and_tokenizer(
     cfg: DictConfig,
 ) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
-    """로컬 pre_stage/final 모델을 로드하고 LoRA를 적용한다.
+    """HF Hub base model을 로드하고 partial_state.pt 적용 후 LoRA를 붙인다.
+
+    Pre-Stage resume과 동일한 패턴으로:
+      1. HF Hub에서 base model 로드 (cfg.model.hub_id)
+      2. resize_token_embeddings()로 vocab 확장
+      3. partial_state.pt의 커스텀 토큰 가중치를 embed_tokens/lm_head에 직접 주입
+      4. prepare_model_for_kbit_training + get_peft_model (base params는 PEFT가 자동 freeze)
 
     Args:
         cfg: Hydra DictConfig. cfg.model, cfg.quantization, cfg.lora 섹션을 참조한다.
@@ -40,34 +47,55 @@ def load_model_and_tokenizer(
             - tokenizer: 커스텀 토큰이 포함된 AutoTokenizer
 
     Raises:
-        FileNotFoundError: model_dir 또는 tokenizer_dir가 없을 경우.
+        FileNotFoundError: model_dir 또는 tokenizer_dir 또는 partial_state.pt가 없을 경우.
     """
     model_dir = Path(cfg.model.model_dir)
     tokenizer_dir = Path(cfg.model.tokenizer_dir)
+    hub_id: str = cfg.model.hub_id
 
     if not model_dir.exists():
-        raise FileNotFoundError(f"모델 디렉토리를 찾을 수 없음: {model_dir}")
+        raise FileNotFoundError(f"pre_stage/final 디렉토리를 찾을 수 없음: {model_dir}")
     if not tokenizer_dir.exists():
         raise FileNotFoundError(f"토크나이저 디렉토리를 찾을 수 없음: {tokenizer_dir}")
 
-    # 토크나이저 로드 (pre_stage/final에 커스텀 토큰 포함)
+    partial_state_path = model_dir / "partial_state.pt"
+    if not partial_state_path.exists():
+        raise FileNotFoundError(f"partial_state.pt를 찾을 수 없음: {partial_state_path}")
+
+    # 토크나이저 로드 (pre_stage/final에 커스텀 토큰 포함된 tokenizer.json)
     tokenizer = AutoTokenizer.from_pretrained(str(tokenizer_dir))
     logger.info(f"토크나이저 로드 완료. vocab size: {len(tokenizer)}")
 
     # 4bit 양자화 설정
     bnb_config = _build_bnb_config(cfg.quantization)
 
-    # 로컬 경로에서 모델 로드
-    # pre_stage/final의 model.safetensors에는 커스텀 토큰 가중치가 이미 병합되어 있으므로
-    # resize_token_embeddings() 호출 불필요
-    logger.info(f"모델 로드 중 (로컬): {model_dir}")
+    # HF Hub에서 base model 로드 (Pre-Stage와 동일한 출처)
+    logger.info(f"base model 로드 중 (HF Hub): {hub_id}")
     model = AutoModelForCausalLM.from_pretrained(
-        str(model_dir),
+        hub_id,
         quantization_config=bnb_config,
         torch_dtype=torch.bfloat16,
         trust_remote_code=True,
     )
-    logger.info(f"모델 로드 완료. vocab_size: {model.config.vocab_size}")
+
+    # vocab 크기 확장: 커스텀 토큰을 수용하도록 embed_tokens / lm_head 행 추가
+    model.resize_token_embeddings(len(tokenizer))
+    logger.info(f"vocab 확장 완료. vocab_size: {model.config.vocab_size}")
+
+    # partial_state.pt 로드하여 커스텀 토큰 행에 Pre-Stage 훈련된 가중치 주입
+    # embed_tokens / lm_head는 4bit 양자화 대상이 아니므로 (bf16) 직접 인덱싱 가능
+    logger.info(f"partial_state.pt 로드 및 커스텀 토큰 가중치 적용 중: {partial_state_path}")
+    partial_state = torch.load(partial_state_path, map_location="cpu", weights_only=True)
+    new_token_ids: list[int] = partial_state["new_token_ids"]
+
+    with torch.no_grad():
+        model.model.embed_tokens.weight.data[new_token_ids] = partial_state["new_embed"].to(
+            model.model.embed_tokens.weight.device
+        )
+        model.lm_head.weight.data[new_token_ids] = partial_state["new_lm_head"].to(
+            model.lm_head.weight.device
+        )
+    logger.info(f"커스텀 토큰 가중치 적용 완료 ({len(new_token_ids)}개 행)")
 
     # kbit 훈련 준비:
     # - gradient checkpointing 활성화
@@ -79,7 +107,7 @@ def load_model_and_tokenizer(
         gradient_checkpointing_kwargs={"use_reentrant": False},
     )
 
-    # LoRA adapter 적용
+    # LoRA adapter 적용 (get_peft_model이 embed_tokens / lm_head 포함 base params 전체 freeze)
     lora_config = _build_lora_config(cfg.lora)
     model = get_peft_model(model, lora_config)
 
@@ -96,7 +124,12 @@ def merge_lora_and_save(
 ) -> None:
     """LoRA adapter를 base model에 병합하고 표준 HuggingFace 형식으로 저장한다.
 
-    run_sft.py의 최종 저장 단계에서 호출한다.
+    .. deprecated::
+        run_sft.py의 기본 최종 저장 흐름에서는 더 이상 호출하지 않는다.
+        기본 흐름은 adapter만 저장(PeftModel.save_pretrained)하며, 이 함수는
+        PEFT 의존성 없이 standalone 추론 모델이 필요하거나 다음 Stage에서
+        full model이 요구될 때 수동으로 호출하기 위해 유지한다.
+
     저장 후 결과물은 다음 Stage 또는 추론에서 from_pretrained()로 로드 가능하다.
 
     Args:

@@ -46,7 +46,6 @@ from src.training.sft import (
     SFTDataset,
     build_trainer,
     load_model_and_tokenizer,
-    merge_lora_and_save,
 )
 
 logger = logging.getLogger(__name__)
@@ -194,14 +193,21 @@ def main(cfg: DictConfig) -> None:
     trainer.log_metrics("eval", eval_metrics)
     trainer.save_metrics("eval", eval_metrics)
 
-    # LoRA adapter를 base model에 병합하고 표준 HuggingFace 형식으로 저장
-    # 저장 결과는 다음 Stage 또는 추론에서 from_pretrained()로 직접 로드 가능
+    # 최종 체크포인트 저장 (중간 체크포인트와 동일한 형식)
+    # adapter_model.safetensors + optimizer.pt + scheduler.pt + trainer_state.json + tokenizer
+    # merge하지 않으므로 추론/다음 Stage 로드 시 base model + partial_state.pt + adapter 조합이 필요하다.
+    # standalone full model이 필요하면 src.training.sft.model_loader.merge_lora_and_save를 수동 호출.
     output_dir = Path(cfg.training.output_dir) / "final"
-    logger.info(f"LoRA 병합 및 모델 저장 중: {output_dir}")
+    logger.info(f"최종 체크포인트 저장 중: {output_dir}")
     # DDP에서는 trainer.model이 DistributedDataParallel로 래핑되어 있으므로
-    # accelerator.unwrap_model()로 실제 PeftModel을 추출한 뒤 merge_and_unload
+    # accelerator.unwrap_model()로 실제 PeftModel을 추출한 뒤 저장
     raw_model = trainer.accelerator.unwrap_model(trainer.model)
-    merge_lora_and_save(raw_model, tokenizer, output_dir)
+    if trainer.accelerator.is_main_process:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        raw_model.save_pretrained(str(output_dir))  # adapter_model.safetensors + adapter_config.json
+        trainer._save_optimizer_and_scheduler(str(output_dir))
+        trainer.state.save_to_json(str(output_dir / "trainer_state.json"))
+        tokenizer.save_pretrained(str(output_dir))
 
     logger.info("=== SFT 훈련 완료 ===")
 

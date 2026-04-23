@@ -48,7 +48,7 @@ from src.training.pre_stage import (
     build_trainer,
     load_model_and_tokenizer,
 )
-from src.training.pre_stage.model_loader import merge_and_restore
+from src.training.pre_stage.model_loader import PartialEmbedding, PartialLMHead
 
 logger = logging.getLogger(__name__)
 
@@ -200,19 +200,32 @@ def main(cfg: DictConfig) -> None:
     trainer.log_metrics("eval", eval_metrics)
     trainer.save_metrics("eval", eval_metrics)
 
-    # 최종 모델 저장
-    # PartialEmbedding/PartialLMHead의 새 토큰 가중치를 원본 모듈에 병합한 뒤
-    # 표준 HuggingFace 형식으로 저장 (다음 Stage에서 from_pretrained로 로드 가능)
+    # 최종 체크포인트 저장 (중간 체크포인트와 동일한 형식)
+    # partial_state.pt + optimizer.pt + scheduler.pt + trainer_state.json + tokenizer
+    # merge하지 않으므로 SFT 로드 시 HF Hub에서 base model을 다시 로드한 뒤 partial_state.pt를 적용한다.
     output_dir = Path(cfg.training.output_dir) / "final"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"새 토큰 가중치 병합 및 모델 저장 중: {output_dir}")
+    logger.info(f"최종 체크포인트 저장 중: {output_dir}")
     # DDP에서는 trainer.model이 DistributedDataParallel로 래핑되어 있으므로
     # accelerator.unwrap_model()로 실제 모델을 추출한 뒤 저장
     raw_model = trainer.accelerator.unwrap_model(trainer.model)
-    merge_and_restore(raw_model)
-    raw_model.save_pretrained(str(output_dir))
-    tokenizer.save_pretrained(str(output_dir))
+    if trainer.accelerator.is_main_process:
+        embed = raw_model.model.embed_tokens
+        lm_head = raw_model.lm_head
+        if isinstance(embed, PartialEmbedding) and isinstance(lm_head, PartialLMHead):
+            torch.save(
+                {
+                    "new_embed": embed.new_embed.data.cpu(),
+                    "new_lm_head": lm_head.new_lm_head.data.cpu(),
+                    "new_token_ids": new_token_ids,
+                },
+                str(output_dir / "partial_state.pt"),
+            )
+            logger.info(f"partial_state.pt 저장 완료: {output_dir}")
+        trainer._save_optimizer_and_scheduler(str(output_dir))
+        trainer.state.save_to_json(str(output_dir / "trainer_state.json"))
+        tokenizer.save_pretrained(str(output_dir))
 
     logger.info("=== Pre-Stage 훈련 완료 ===")
 

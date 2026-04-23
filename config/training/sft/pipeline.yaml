@@ -1,15 +1,17 @@
 # SFT(Supervised Fine-Tuning) 훈련 파이프라인 설정
 # Pre-Stage에서 워밍업된 모델을 입력으로 LoRA를 적용한 전체 레이어 fine-tuning.
-# 모델 로드 경로: HF Hub 대신 로컬 pre_stage/final 경로 사용.
+# 모델 로드: HF Hub base model + final_checkpoints/pre_stage/partial_state.pt 적용.
 
 model:
   user: "Qwen"
   name: "Qwen2.5-Coder-7B"
-  # HF Hub 대신 pre_stage 최종 병합 모델을 로컬에서 로드
-  # merge_and_restore()로 커스텀 토큰 가중치가 병합된 상태
-  model_dir: "data/models/${model.name}/checkpoints/pre_stage/final"
-  tokenizer_dir: "${model.model_dir}"
-  vocab_extension: "data/models/${model.name}/tokenization/vocab_extension.json"
+  hub_id: "${model.user}/${model.name}"  # HF Hub에서 base model 로드에 사용
+  # partial_state.pt 위치: 훈련 결과를 직접 관리하는 final_checkpoints/ 사용
+  # (checkpoints/pre_stage/final/은 훈련 반복 시 덮어씌워질 수 있음)
+  model_dir: "data/models/${model.name}/final_checkpoints/pre_stage"
+  # 토크나이저는 훈련 단계와 무관하게 공통 tokenization/ 경로에서 로드
+  tokenizer_dir: "data/models/${model.name}/tokenization"
+  vocab_extension: "${model.tokenizer_dir}/vocab_extension.json"
 
 quantization:
   load_in_4bit: true

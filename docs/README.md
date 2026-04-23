@@ -45,7 +45,7 @@ floorplan-llm/
 │       ├── pre_stage/              # Pre-Stage 훈련 설정
 │       │   └── pipeline.yaml       # defaults로 training/augmentation: pre_stage 합성
 │       └── sft/                    # SFT 훈련 설정
-│           └── pipeline.yaml       # LoRA, 학습률, model_dir (pre_stage/final) 등
+│           └── pipeline.yaml       # LoRA, 학습률, hub_id/model_dir (final_checkpoints/pre_stage) 등
 │
 ├── src/                            # 핵심 모듈 (uv 패키지로 설치)
 │   ├── build_dataset/
@@ -80,7 +80,7 @@ floorplan-llm/
 │       │   ├── collator.py         # Dynamic padding + label 마스킹
 │       │   └── trainer.py          # TrainingArguments + Trainer 빌드
 │       └── sft/                    # SFT 훈련 모듈
-│           ├── model_loader.py     # 로컬 pre_stage/final 로드 + LoRA 적용 + merge_lora_and_save
+│           ├── model_loader.py     # HF Hub base model + partial_state.pt 가중치 주입 + LoRA 적용
 │           └── trainer.py          # TrainingArguments + 표준 Trainer 빌드
 │
 ├── scripts/                        # CLI 실행 진입점
@@ -96,7 +96,7 @@ floorplan-llm/
 │       ├── augmentation/
 │       │   └── validate_augmentation.py # 증강 결과 검증
 │       ├── run_pre_stage.py        # Pre-Stage 훈련 실행
-│       └── run_sft.py              # SFT 훈련 실행 (LoRA + pre_stage/final 로드)
+│       └── run_sft.py              # SFT 훈련 실행 (HF Hub + partial_state.pt + LoRA adapter 저장)
 │
 ├── tests/                          # 검증 및 시각화 스크립트 (핵심 파이프라인 외)
 │   ├── build_dataset/
@@ -120,13 +120,15 @@ floorplan-llm/
 │   └── models/
 │       └── {model.name}/                       # 모델명별 독립 저장 (예: Qwen2.5-Coder-7B)
 │           ├── tokenization/                   # 확장된 토크나이저 + vocab
+│           ├── final_checkpoints/              # 수동 관리 최종 버전 (훈련 run final과 분리)
+│           │   └── pre_stage/                  # Pre-Stage 완료 후 수동 복사 (SFT 입력)
 │           └── checkpoints/
-│               ├── pre_stage/                  # Pre-Stage 체크포인트 + 최종 모델
+│               ├── pre_stage/                  # Pre-Stage 훈련 run 체크포인트
 │               │   ├── checkpoint-*/           # 에폭별 자동 저장 체크포인트
-│               │   └── final/                  # 최종 병합 모델 (SFT 입력)
-│               └── sft/                        # SFT 체크포인트 + 최종 모델
+│               │   └── final/                  # 훈련 run 최종 체크포인트 (partial_state.pt)
+│               └── sft/                        # SFT 훈련 run 체크포인트
 │                   ├── checkpoint-*/           # 에폭별 자동 저장 (adapter_model.safetensors)
-│                   └── final/                  # LoRA 병합된 최종 모델 (다음 Stage 입력)
+│                   └── final/                  # 훈련 run 최종 체크포인트 (adapter + optimizer)
 │
 ├── outputs/                        # Hydra 실행 로그 + 설정 스냅샷
 │   └── training/
@@ -373,7 +375,7 @@ uv run python scripts/training/run_pre_stage.py \
 
 ### SFT: LoRA Fine-tuning
 
-Pre-Stage에서 워밍업된 로컬 모델(`pre_stage/final`)에 LoRA를 적용하여 attention/MLP 전 레이어를 fine-tuning한다.
+HF Hub에서 base model을 로드하고 Pre-Stage에서 훈련된 커스텀 토큰 가중치(`final_checkpoints/pre_stage/partial_state.pt`)를 주입한 뒤 LoRA를 적용하여 attention/MLP 전 레이어를 fine-tuning한다.
 
 ```bash
 # 기본 실행
@@ -409,20 +411,23 @@ data/models/{model.name}/checkpoints/sft/
 │   ├── adapter_config.json        # LoRA 설정 (use_dora: false)
 │   ├── optimizer.pt               # AdamW state
 │   └── trainer_state.json
-└── final/                      # LoRA 병합된 최종 모델 (표준 HuggingFace 형식)
-    ├── model.safetensors       # LoRA 병합된 전체 가중치
-    ├── tokenizer.json
-    └── config.json
+└── final/                      # 훈련 run 최종 체크포인트 (중간 체크포인트와 동일 구조)
+    ├── adapter_model.safetensors
+    ├── adapter_config.json
+    ├── optimizer.pt
+    ├── scheduler.pt
+    ├── trainer_state.json
+    └── tokenizer.json 등
 ```
 
 ---
 
 ### SFT 검증: 통합 검증 스크립트
 
-pre_stage/final 가중치 로드, LoRA 구조, 훈련 중 파라미터 갱신, 저장/Resume을 4단계로 통합 검증한다.
+partial_state.pt 가중치 로드 및 커스텀 토큰 주입, LoRA 구조, 훈련 중 파라미터 갱신, 저장/Resume을 4단계로 통합 검증한다.
 
 **검증 단계:**
-- **Phase 0:** 파일 존재 확인 (model.safetensors, config.json, tokenizer.json, vocab_extension.json)
+- **Phase 0:** 파일 존재 확인 (partial_state.pt, tokenizer.json, tokenizer_config.json, vocab_extension.json)
 - **Phase 1:** 모델 로드 + vocab_size 일치 + 커스텀 토큰 확인 + LoRA 구조 확인 (lora_A/lora_B 생성 여부, 7개 target_modules 전부 커버, base weight frozen)
 - **Phase 2:** N step 훈련 전후 lora_A/lora_B 갱신 확인 + frozen 파라미터 불변 확인
 - **Phase 3a:** 체크포인트 저장 확인 (adapter_model.safetensors, use_dora:false, optimizer.pt)
@@ -433,7 +438,7 @@ uv run python tests/training/sft/validate_sft.py
 
 # 특정 model_dir 지정
 uv run python tests/training/sft/validate_sft.py \
-    --model_dir data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/final
+    --model_dir data/models/Qwen2.5-Coder-7B/final_checkpoints/pre_stage
 ```
 
 > 모든 Phase가 `[PASS]`가 출력되어야 정상.
@@ -477,7 +482,12 @@ data/models/{model.name}/checkpoints/pre_stage/
 │   ├── partial_state.pt        # new_embed / new_lm_head 가중치 (model.safetensors 없음)
 │   ├── optimizer.pt            # AdamW state (~16MB)
 │   └── trainer_state.json
-└── final/                      # 최종 병합 모델 (표준 HuggingFace 형식, tokenizer 포함)
+└── final/                      # 훈련 run 최종 체크포인트 (중간 체크포인트와 동일 구조)
+    ├── partial_state.pt        # new_embed / new_lm_head 가중치
+    ├── optimizer.pt
+    ├── scheduler.pt
+    ├── trainer_state.json
+    └── tokenizer.json 등
 ```
 
 ---
@@ -544,7 +554,9 @@ model:
 
 | 파라미터 | 기본값 | 설명 |
 |---------|--------|------|
-| `model.model_dir` | `data/models/${model.name}/checkpoints/pre_stage/final` | 로컬 pre_stage 최종 모델 경로 |
+| `model.hub_id` | `${model.user}/${model.name}` | HF Hub에서 base model 로드에 사용 |
+| `model.model_dir` | `data/models/${model.name}/final_checkpoints/pre_stage` | partial_state.pt 위치 (수동 관리 최종 버전) |
+| `model.tokenizer_dir` | `data/models/${model.name}/tokenization` | 토크나이저 경로 (훈련 단계와 무관한 공통 경로) |
 | `lora.r` | `32` | LoRA rank (adapter 표현력) |
 | `lora.lora_alpha` | `64` | LoRA scaling factor (alpha/r=2, 실효 LR 스케일) |
 | `lora.lora_dropout` | `0.05` | adapter dropout |
