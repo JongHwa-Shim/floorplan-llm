@@ -370,6 +370,14 @@ def load_model_with_partial_state(
     model.lm_head.weight.data = model.lm_head.weight.data.to(torch.bfloat16)
     logger.info("embed_tokens / lm_head: bf16 재캐스팅 완료")
 
+    # Mod Record: resize_token_embeddings 시 NF4 lm_head가 fp32 nn.Linear(~2GB)로 역양자화되고,
+    # prepare_model_for_kbit_training이 embed_tokens(~2GB)를 fp32로 추가 캐스팅한다.
+    # 위 bf16 재캐스팅으로 참조가 끊기지만 PyTorch CUDA 캐시에 잔류해 실제 가용 VRAM을 잠식한다.
+    # batch=4 이상 훈련 시 캐시 오염(~4GB)이 훈련 피크 메모리에 더해져 OOM이 발생하므로 해제한다.
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    logger.info("CUDA 캐시 해제 완료 (resize/prepare 잔류 fp32 텐서 반환)")
+
     # partial_state.pt 주입: Pre-Stage에서 훈련된 new token 행을 embed_tokens/lm_head에 복원
     partial_state = torch.load(
         partial_state_path, map_location="cpu", weights_only=True

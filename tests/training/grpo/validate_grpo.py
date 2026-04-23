@@ -20,6 +20,8 @@ import logging
 import sys
 from pathlib import Path
 
+import torch
+
 # 프로젝트 루트를 sys.path에 추가
 _PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 if _PROJECT_ROOT not in sys.path:
@@ -30,6 +32,24 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def _vram_report(label: str) -> None:
+    """현재 CUDA VRAM 사용량을 로깅한다.
+
+    Args:
+        label: 출력 레이블 (예: "모델 로드 후").
+    """
+    if not torch.cuda.is_available():
+        return
+    for i in range(torch.cuda.device_count()):
+        allocated = torch.cuda.memory_allocated(i) / 1024 ** 3
+        reserved = torch.cuda.memory_reserved(i) / 1024 ** 3
+        peak = torch.cuda.max_memory_allocated(i) / 1024 ** 3
+        logger.info(
+            f"[VRAM] {label} | GPU{i}: "
+            f"allocated={allocated:.2f} GB, reserved={reserved:.2f} GB, peak={peak:.2f} GB"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -566,8 +586,12 @@ def phase2_model_load() -> bool:
     # 모델 로드 (Hub + partial_state + SFT adapter + GRPO adapter 스태킹)
     try:
         from src.training.grpo.model_loader import load_model_and_tokenizer
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+        _vram_report("모델 로드 전")
         logger.info("모델 로드 중 (약 1~2분 소요)...")
         model, tokenizer = load_model_and_tokenizer(cfg)
+        _vram_report("모델 로드 후")
         logger.info(f"모델 로드 완료. vocab_size: {model.config.vocab_size}")
     except Exception as e:
         logger.error(f"모델 로드 실패: {e}")
@@ -760,8 +784,13 @@ def phase3_mini_training() -> bool:
         from src.training.grpo.trainer import GDPOTrainer
         from src.training.grpo.dataset import GRPOPromptDataset
 
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+        _vram_report("모델 로드 전")
+
         logger.info("모델 로드 중...")
         model, tokenizer = load_model_and_tokenizer(cfg)
+        _vram_report("모델 로드 후")
 
         vocab_path = Path(_PROJECT_ROOT) / str(cfg.model.vocab_extension)
 
@@ -777,15 +806,18 @@ def phase3_mini_training() -> bool:
         vocab = load_vocab(vocab_path, str(Path(_PROJECT_ROOT) / str(cfg.model.tokenizer_dir)))
         train_dataset = GRPOPromptDataset(cfg, tokenizer, split="train", seed=42)
 
+        # Mod Record: OOM 재현 및 수정 검증을 위해 이전보다 큰 배치로 테스트.
+        # num_generations=4, per_device_train_batch_size=2, max_completion_length=256.
+        # 이 설정에서 OOM 없이 실행되면 수정이 유효함을 확인한다.
         grpo_config = GRPOConfig(
             output_dir="/tmp/grpo_phase3",
-            num_generations=2,       # 최소 생성 수
-            generation_batch_size=2,
-            max_completion_length=512,
-            per_device_train_batch_size=1,
+            num_generations=4,                # 이전 2 → 4
+            generation_batch_size=4,
+            max_completion_length=256,        # 이전 512 → 256 (입출력 합산 200+ 토큰)
+            per_device_train_batch_size=2,    # 이전 1 → 2
             gradient_accumulation_steps=1,
-            max_steps=3,             # 3 step만 실행
-            report_to="none",        # W&B 비활성화
+            max_steps=3,
+            report_to="none",
             logging_steps=1,
             save_strategy="no",
         )
@@ -800,8 +832,13 @@ def phase3_mini_training() -> bool:
             vocab=vocab,
         )
 
-        logger.info("훈련 시작 (3 step)...")
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+        _vram_report("훈련 시작 전")
+
+        logger.info("훈련 시작 (3 step, num_generations=4, batch=2)...")
         train_result = trainer.train()
+        _vram_report("훈련 완료 후")
         logger.info(f"훈련 완료: {train_result.metrics}")
 
         # loss가 NaN/Inf가 아닌지 확인

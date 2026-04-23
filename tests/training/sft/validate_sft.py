@@ -96,6 +96,24 @@ def set_seed(seed: int = 42) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
+def _vram_report(label: str) -> None:
+    """현재 CUDA VRAM 사용량을 로깅한다.
+
+    Args:
+        label: 출력 레이블 (예: "모델 로드 후").
+    """
+    if not torch.cuda.is_available():
+        return
+    for i in range(torch.cuda.device_count()):
+        allocated = torch.cuda.memory_allocated(i) / 1024 ** 3
+        reserved = torch.cuda.memory_reserved(i) / 1024 ** 3
+        peak = torch.cuda.max_memory_allocated(i) / 1024 ** 3
+        logger.info(
+            f"[VRAM] {label} | GPU{i}: "
+            f"allocated={allocated:.2f} GB, reserved={reserved:.2f} GB, peak={peak:.2f} GB"
+        )
+
+
 def load_cfg(output_dir: str, max_steps: int, pre_stage_dir: str | None = None) -> DictConfig:
     """테스트용 DictConfig를 구성한다.
 
@@ -296,8 +314,14 @@ def phase1_model_structure(cfg: DictConfig) -> tuple[bool, object, object]:
     logger.info("─" * 60)
     passed = True
 
+    # VRAM 초기값 기록
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+    _vram_report("모델 로드 전")
+
     # 모델 + LoRA 로드
     model, tokenizer = load_model_and_tokenizer(cfg)
+    _vram_report("모델 로드 후")
 
     # ── vocab_size 검증 ──────────────────────────────────────────────────────
     vocab_size_model = model.config.vocab_size
@@ -427,12 +451,21 @@ def phase2_training_update(
     logger.info("")
     logger.info("─" * 60)
     logger.info(f"Phase 2: 훈련 중 파라미터 갱신 검증 ({STEPS_PHASE2} steps)")
+    logger.info(
+        f"  배치 크기: {cfg.training.per_device_train_batch_size} "
+        f"(pipeline.yaml 기본값 유지)"
+    )
     logger.info("─" * 60)
     passed = True
 
     # 훈련 전 스냅샷
     snap_before = _snap_dora_params(model)
     frozen_before = _snap_frozen_params(model)
+
+    # VRAM 피크 초기화 후 훈련 시작
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+    _vram_report("훈련 시작 전")
 
     # 데이터셋 로드
     train_dataset = SFTDataset(cfg, tokenizer, split="train", seed=42)
@@ -446,6 +479,9 @@ def phase2_training_update(
         cfg=cfg,
     )
     trainer.train()
+
+    # 훈련 후 VRAM 보고
+    _vram_report("훈련 완료 후")
 
     # 훈련 후 스냅샷
     snap_after = _snap_dora_params(model)
