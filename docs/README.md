@@ -45,7 +45,7 @@ floorplan-llm/
 │       ├── pre_stage/              # Pre-Stage 훈련 설정
 │       │   └── pipeline.yaml       # defaults로 training/augmentation: pre_stage 합성
 │       └── sft/                    # SFT 훈련 설정
-│           └── pipeline.yaml       # DoRA, 학습률, model_dir (pre_stage/final) 등
+│           └── pipeline.yaml       # LoRA, 학습률, model_dir (pre_stage/final) 등
 │
 ├── src/                            # 핵심 모듈 (uv 패키지로 설치)
 │   ├── build_dataset/
@@ -80,7 +80,7 @@ floorplan-llm/
 │       │   ├── collator.py         # Dynamic padding + label 마스킹
 │       │   └── trainer.py          # TrainingArguments + Trainer 빌드
 │       └── sft/                    # SFT 훈련 모듈
-│           ├── model_loader.py     # 로컬 pre_stage/final 로드 + DoRA 적용 + merge_dora_and_save
+│           ├── model_loader.py     # 로컬 pre_stage/final 로드 + LoRA 적용 + merge_lora_and_save
 │           └── trainer.py          # TrainingArguments + 표준 Trainer 빌드
 │
 ├── scripts/                        # CLI 실행 진입점
@@ -96,7 +96,7 @@ floorplan-llm/
 │       ├── augmentation/
 │       │   └── validate_augmentation.py # 증강 결과 검증
 │       ├── run_pre_stage.py        # Pre-Stage 훈련 실행
-│       └── run_sft.py              # SFT 훈련 실행 (DoRA + pre_stage/final 로드)
+│       └── run_sft.py              # SFT 훈련 실행 (LoRA + pre_stage/final 로드)
 │
 ├── tests/                          # 검증 및 시각화 스크립트 (핵심 파이프라인 외)
 │   ├── build_dataset/
@@ -108,7 +108,7 @@ floorplan-llm/
 │       │   ├── validate_resume.py          # Resume 체크포인트 복원 검증
 │       │   └── validate_save_and_load.py   # 저장/로드 후 optimizer 업데이트 정상 동작 검증
 │       └── sft/
-│           └── validate_sft.py             # SFT 통합 검증 (로드·DoRA구조·훈련·저장·Resume)
+│           └── validate_sft.py             # SFT 통합 검증 (로드·LoRA구조·훈련·저장·Resume)
 │
 ├── data/                           # 데이터 저장소 (Git 추적 제외)
 │   ├── dataset/
@@ -126,7 +126,7 @@ floorplan-llm/
 │               │   └── final/                  # 최종 병합 모델 (SFT 입력)
 │               └── sft/                        # SFT 체크포인트 + 최종 모델
 │                   ├── checkpoint-*/           # 에폭별 자동 저장 (adapter_model.safetensors)
-│                   └── final/                  # DoRA 병합된 최종 모델 (다음 Stage 입력)
+│                   └── final/                  # LoRA 병합된 최종 모델 (다음 Stage 입력)
 │
 ├── outputs/                        # Hydra 실행 로그 + 설정 스냅샷
 │   └── training/
@@ -209,7 +209,7 @@ PNG (RPLAN 데이터셋)
 [Pre-Stage] 새 토큰 Embedding 워밍업 → 커스텀 토큰 embedding 안착
         │
         ▼
-[SFT] DoRA Fine-tuning         → attention/MLP 전 레이어 학습
+[SFT] LoRA Fine-tuning         → attention/MLP 전 레이어 학습
         │
         ▼
 [Step 5] DPO → GRPO (구현 예정) → 평면도 생성 모델
@@ -371,9 +371,9 @@ uv run python scripts/training/run_pre_stage.py \
     resume.checkpoint_path=data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/checkpoint-500
 ```
 
-### SFT: DoRA Fine-tuning
+### SFT: LoRA Fine-tuning
 
-Pre-Stage에서 워밍업된 로컬 모델(`pre_stage/final`)에 DoRA를 적용하여 attention/MLP 전 레이어를 fine-tuning한다.
+Pre-Stage에서 워밍업된 로컬 모델(`pre_stage/final`)에 LoRA를 적용하여 attention/MLP 전 레이어를 fine-tuning한다.
 
 ```bash
 # 기본 실행
@@ -385,7 +385,7 @@ uv run python scripts/training/run_sft.py \
 
 # 하이퍼파라미터 오버라이드
 uv run python scripts/training/run_sft.py \
-    training.learning_rate=1e-4 dora.r=16
+    training.learning_rate=1e-4 lora.r=16
 
 # DDP 멀티 GPU: nproc_per_node를 config에서 설정하거나 override로 지정
 uv run python scripts/training/run_sft.py \
@@ -405,12 +405,12 @@ uv run python scripts/training/run_sft.py \
 ```
 data/models/{model.name}/checkpoints/sft/
 ├── checkpoint-{step}/          # 에폭별 자동 저장 (최대 save_total_limit개 보존)
-│   ├── adapter_model.safetensors  # DoRA adapter 가중치
-│   ├── adapter_config.json        # DoRA 설정 (use_dora: true)
+│   ├── adapter_model.safetensors  # LoRA adapter 가중치
+│   ├── adapter_config.json        # LoRA 설정 (use_dora: false)
 │   ├── optimizer.pt               # AdamW state
 │   └── trainer_state.json
-└── final/                      # DoRA 병합된 최종 모델 (표준 HuggingFace 형식)
-    ├── model.safetensors       # DoRA 병합된 전체 가중치
+└── final/                      # LoRA 병합된 최종 모델 (표준 HuggingFace 형식)
+    ├── model.safetensors       # LoRA 병합된 전체 가중치
     ├── tokenizer.json
     └── config.json
 ```
@@ -419,13 +419,13 @@ data/models/{model.name}/checkpoints/sft/
 
 ### SFT 검증: 통합 검증 스크립트
 
-pre_stage/final 가중치 로드, DoRA 구조, 훈련 중 파라미터 갱신, 저장/Resume을 4단계로 통합 검증한다.
+pre_stage/final 가중치 로드, LoRA 구조, 훈련 중 파라미터 갱신, 저장/Resume을 4단계로 통합 검증한다.
 
 **검증 단계:**
 - **Phase 0:** 파일 존재 확인 (model.safetensors, config.json, tokenizer.json, vocab_extension.json)
-- **Phase 1:** 모델 로드 + vocab_size 일치 + 커스텀 토큰 확인 + DoRA 구조 확인 (lora_magnitude_vector 생성 여부, 7개 target_modules 전부 커버, base weight frozen)
-- **Phase 2:** N step 훈련 전후 lora_A/lora_B/lora_magnitude_vector 갱신 확인 + frozen 파라미터 불변 확인
-- **Phase 3a:** 체크포인트 저장 확인 (adapter_model.safetensors, use_dora:true, optimizer.pt)
+- **Phase 1:** 모델 로드 + vocab_size 일치 + 커스텀 토큰 확인 + LoRA 구조 확인 (lora_A/lora_B 생성 여부, 7개 target_modules 전부 커버, base weight frozen)
+- **Phase 2:** N step 훈련 전후 lora_A/lora_B 갱신 확인 + frozen 파라미터 불변 확인
+- **Phase 3a:** 체크포인트 저장 확인 (adapter_model.safetensors, use_dora:false, optimizer.pt)
 - **Phase 3b:** Resume 후 adapter 가중치 복원 + 추가 훈련 갱신 + global_step 연속성 확인
 
 ```bash
@@ -545,10 +545,10 @@ model:
 | 파라미터 | 기본값 | 설명 |
 |---------|--------|------|
 | `model.model_dir` | `data/models/${model.name}/checkpoints/pre_stage/final` | 로컬 pre_stage 최종 모델 경로 |
-| `dora.r` | `32` | DoRA rank (adapter 표현력) |
-| `dora.lora_alpha` | `64` | DoRA scaling factor (alpha/r=2, 실효 LR 스케일) |
-| `dora.lora_dropout` | `0.05` | adapter dropout |
-| `dora.target_modules` | `q/k/v/o_proj, gate/up/down_proj` | DoRA 적용 레이어 (attention + MLP 전부) |
+| `lora.r` | `32` | LoRA rank (adapter 표현력) |
+| `lora.lora_alpha` | `64` | LoRA scaling factor (alpha/r=2, 실효 LR 스케일) |
+| `lora.lora_dropout` | `0.05` | adapter dropout |
+| `lora.target_modules` | `q/k/v/o_proj, gate/up/down_proj` | LoRA 적용 레이어 (attention + MLP 전부) |
 | `training.learning_rate` | `2e-4` | adapter 학습률 |
 | `training.num_train_epochs` | `3` | 훈련 에폭 수 |
 | `training.gradient_accumulation_steps` | `4` | 그래디언트 누적 (실효 배치 4) |
@@ -646,7 +646,7 @@ You are a floor plan generator. Given room conditions, generate complete floorpl
 | Step 3 | JSONL → Arrow 변환 | ✅ 완료 |
 | Step 4 | 데이터 증강 + 토크나이징 | ✅ 완료 |
 | Pre-Stage | 새 토큰 Embedding 워밍업 훈련 | ✅ 완료 |
-| SFT | DoRA Fine-tuning (attention/MLP 전 레이어) | ✅ 완료 |
+| SFT | LoRA Fine-tuning (attention/MLP 전 레이어) | ✅ 완료 |
 | Step 5 | DPO → GRPO Fine-tuning | 🔜 구현 예정 |
 | Step 6 | 추론 + 시각화 | 🔜 구현 예정 |
 
