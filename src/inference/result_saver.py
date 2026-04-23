@@ -230,11 +230,13 @@ def _prepare_sample_for_visualization(
                 if room.get("rid") in drop_state.drop_type:
                     room["type"] = "unknown"
 
-        # 방 좌표 제거: drop_coords에 해당하는 rid의 좌표를 빈 리스트로 대체
+        # 방 좌표 제거: drop_coords에 해당하는 rid의 방을 시각화에서 제거
+        # 좌표가 없는 방은 draw_room_polygon에서 fillPoly 빈 배열 에러를 일으키므로 제거
         if drop_state.drop_coords:
-            for room in vis.get("rooms", []):
-                if room.get("rid") in drop_state.drop_coords:
-                    room["coords"] = []
+            vis["rooms"] = [
+                r for r in vis.get("rooms", [])
+                if r.get("rid") not in drop_state.drop_coords
+            ]
 
         # 엣지 필터링: drop_edge에 해당하는 인덱스의 엣지 제거
         if drop_state.drop_edge:

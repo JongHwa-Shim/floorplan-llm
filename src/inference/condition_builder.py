@@ -42,6 +42,86 @@ from src.training.augmentation.tokenizer import (
 logger = logging.getLogger(__name__)
 
 
+def _jsonl_to_columnar(sample: dict) -> dict:
+    """JSONL row-oriented 샘플을 Arrow columnar 포맷으로 변환한다.
+
+    AugmentationPipeline 내부의 to_row_oriented()는 Arrow columnar 포맷만 처리한다.
+    JSONL에서 로드한 row-oriented 데이터를 파이프라인에 전달하기 전에 변환한다.
+
+    포맷 차이:
+        JSONL rooms: [{"rid", "type", "coords"}, ...]
+        JSONL edges: [{"pair", "doors": [{x,y,w,h}]}, ...] — "doors" 복수형 키
+        JSONL front_door: {"x", "y", "w", "h"} 단일 dict
+        JSONL spatial: [[rid_a, rid_b, direction], ...]
+
+        Arrow rooms: {"rid": [...], "type": [...], "coords": [...]}
+        Arrow edges: {"pair": [...], "door": [{"x":[...], ...}]} — "door" 단수형 키, 값이 list
+        Arrow front_door: {"x": [val], "y": [val], "w": [val], "h": [val]}
+        Arrow spatial: {"rid_a": [...], "rid_b": [...], "direction": [...]}
+
+    Args:
+        sample: JSONL FloorplanLoader가 반환한 row-oriented 딕셔너리.
+
+    Returns:
+        to_row_oriented()가 처리 가능한 Arrow columnar 포맷 딕셔너리.
+    """
+    rooms = sample["rooms"]
+    edges = sample["edges"]
+    spatial = sample.get("spatial") or []
+    front_door = sample.get("front_door")
+
+    rooms_col = {
+        "rid": [r["rid"] for r in rooms],
+        "type": [r["type"] for r in rooms],
+        "coords": [r["coords"] for r in rooms],
+    }
+
+    # edges: "doors"(JSONL) → "door"(Arrow), 각 도어 목록을 dict-of-lists로 변환
+    edge_pairs = [e["pair"] for e in edges]
+    edge_doors = []
+    for e in edges:
+        doors = e.get("doors") or e.get("door") or []
+        if doors:
+            edge_doors.append({
+                "x": [d["x"] for d in doors],
+                "y": [d["y"] for d in doors],
+                "w": [d["w"] for d in doors],
+                "h": [d["h"] for d in doors],
+            })
+        else:
+            edge_doors.append({"x": [], "y": [], "w": [], "h": []})
+    edges_col = {"pair": edge_pairs, "door": edge_doors}
+
+    # front_door: 단일 dict → 단일 원소 list-of-values dict (또는 빈 dict)
+    if front_door is not None:
+        front_door_col = {
+            "x": [front_door["x"]],
+            "y": [front_door["y"]],
+            "w": [front_door["w"]],
+            "h": [front_door["h"]],
+        }
+    else:
+        front_door_col = {"x": [], "y": [], "w": [], "h": []}
+
+    # spatial: list-of-lists → columnar dict (비어있으면 빈 list 유지)
+    if spatial:
+        spatial_col = {
+            "rid_a": [s[0] if isinstance(s, (list, tuple)) else s["rid_a"] for s in spatial],
+            "rid_b": [s[1] if isinstance(s, (list, tuple)) else s["rid_b"] for s in spatial],
+            "direction": [s[2] if isinstance(s, (list, tuple)) else s["direction"] for s in spatial],
+        }
+    else:
+        spatial_col = []
+
+    return {
+        "plan_id": sample["plan_id"],
+        "rooms": rooms_col,
+        "edges": edges_col,
+        "front_door": front_door_col,
+        "spatial": spatial_col,
+    }
+
+
 def load_samples(
     cfg: DictConfig,
     tokenizer: AutoTokenizer | None = None,
@@ -78,15 +158,16 @@ def load_samples(
             raise ValueError("input.mode='jsonl_file'이지만 input.jsonl_file이 설정되지 않았습니다.")
         loader = FloorplanLoader([Path(jsonl_file)])
         row_samples = loader.load_all()
-        # JSONL은 이미 row-oriented → raw와 row가 동일
-        raw_samples = row_samples
+        # Mod Record: JSONL은 row-oriented이지만 pipeline 내부 to_row_oriented()가
+        # Arrow columnar 포맷만 처리하므로 파이프라인 전달 전 columnar 변환 필요
+        raw_samples = [_jsonl_to_columnar(s) for s in row_samples]
 
     elif mode == "jsonl_dir":
         jsonl_dir = Path(cfg.input.jsonl_dir)
         pattern = cfg.input.get("jsonl_pattern", "*.jsonl")
         loader = FloorplanLoader.from_directory(jsonl_dir, pattern)
         row_samples = loader.load_all()
-        raw_samples = row_samples
+        raw_samples = [_jsonl_to_columnar(s) for s in row_samples]
 
     elif mode == "arrow":
         arrow_dir = cfg.input.arrow_dir
@@ -177,7 +258,10 @@ def build_condition_with_augmentation(
     """
     condition_tokens, output_tokens = pipeline(raw_sample)
     aug_summary = pipeline.augmented_summary()
-    augmented_sample = pipeline.last_augmented_sample
+    # Mod Record: AugmentationPipeline이 last_augmented_sample을 저장하지 않으므로
+    # pipeline 호출 후 raw_sample(columnar)을 row-oriented로 변환해 시각화용 샘플로 사용.
+    # 셔플/플립 등 변형 증강은 condition_tokens에 반영되어 있으나 시각화 샘플에는 미반영됨.
+    augmented_sample = getattr(pipeline, "last_augmented_sample", None) or to_row_oriented(raw_sample)
     drop_state = pipeline.last_drop_state
     return condition_tokens, output_tokens, aug_summary, augmented_sample, drop_state
 

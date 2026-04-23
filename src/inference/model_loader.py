@@ -5,8 +5,8 @@ Mod Record: 이전 구조에서는 단일 model_dir의 full model(merged)만 지
   - "adapters": Hub NF4 + partial_state.pt + adapter 체인 (stage별 adapter 스태킹)
   - "merged": pre-merged full model 직접 로드 (merge_model.py 유틸로 사전 생성)
 
-adapters 모드에서 중간 adapter는 base에 merge하고 마지막 adapter는 PeftModel로 로드한다.
-이로써 모든 stage의 adapter 효과가 올바르게 합성된다.
+Mod Record: adapters 모드에서 이전에는 중간 adapter를 base에 merge_and_unload()로 병합했으나,
+PEFT의 named adapter API(load_adapter)를 사용해 모든 adapter를 merge 없이 별도 유지하도록 변경.
 """
 
 import logging
@@ -17,9 +17,80 @@ from omegaconf import DictConfig
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
-from src.training.pre_stage.model_loader import load_model_with_partial_state
-
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# 내부 헬퍼
+# ---------------------------------------------------------------------------
+
+def _build_bnb_config(quant_cfg: DictConfig) -> BitsAndBytesConfig:
+    """DictConfig로부터 BitsAndBytesConfig를 생성한다.
+
+    Args:
+        quant_cfg: cfg.quantization 섹션.
+
+    Returns:
+        설정된 BitsAndBytesConfig 인스턴스.
+    """
+    return BitsAndBytesConfig(
+        load_in_4bit=quant_cfg.load_in_4bit,
+        bnb_4bit_compute_dtype=getattr(torch, quant_cfg.bnb_4bit_compute_dtype),
+        bnb_4bit_quant_type=quant_cfg.bnb_4bit_quant_type,
+        bnb_4bit_use_double_quant=quant_cfg.bnb_4bit_use_double_quant,
+    )
+
+
+def _load_base_with_partial_state(
+    cfg: DictConfig,
+    partial_state_path: Path,
+) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
+    """HF Hub base model을 NF4로 로드하고 partial_state.pt의 커스텀 토큰 임베딩을 주입한다.
+
+    Pre-Stage에서 PartialEmbedding/PartialLMHead로 훈련된 커스텀 토큰 가중치를
+    표준 embed_tokens.weight / lm_head.weight에 직접 복사한다.
+    LoRA 없이 순수 base model + 커스텀 토큰만 포함한 상태를 반환한다.
+    이후 PeftModel.from_pretrained()이 adapter_config.json을 읽어 LoRA 구조를 복원한다.
+
+    Args:
+        cfg: Hydra DictConfig. cfg.model.hub_id, cfg.model.tokenizer_dir,
+             cfg.quantization 섹션을 참조한다.
+        partial_state_path: partial_state.pt 파일 경로.
+
+    Returns:
+        tuple:
+            - model: 커스텀 토큰 임베딩이 주입된 AutoModelForCausalLM (NF4)
+            - tokenizer: 커스텀 토큰이 포함된 AutoTokenizer
+    """
+    tokenizer = AutoTokenizer.from_pretrained(cfg.model.tokenizer_dir)
+    logger.info("토크나이저 로드 완료. vocab size: %d", len(tokenizer))
+
+    bnb_config = _build_bnb_config(cfg.quantization)
+    model = AutoModelForCausalLM.from_pretrained(
+        cfg.model.hub_id,
+        quantization_config=bnb_config,
+        torch_dtype=torch.bfloat16,
+        trust_remote_code=True,
+    )
+    model.resize_token_embeddings(len(tokenizer))
+    logger.info("Hub 모델 로드 및 vocab 확장 완료: %s", cfg.model.hub_id)
+
+    # partial_state.pt: pre-stage에서 PartialEmbedding/PartialLMHead로 훈련된
+    # 커스텀 토큰 행만 저장한 파일. new_token_ids 인덱스 위치에 직접 주입한다.
+    partial_state = torch.load(partial_state_path, map_location="cpu", weights_only=True)
+    new_token_ids = partial_state["new_token_ids"]
+    with torch.no_grad():
+        embed_w = model.model.embed_tokens.weight
+        model.model.embed_tokens.weight.data[new_token_ids] = (
+            partial_state["new_embed"].to(device=embed_w.device, dtype=embed_w.dtype)
+        )
+        lm_w = model.lm_head.weight
+        model.lm_head.weight.data[new_token_ids] = (
+            partial_state["new_lm_head"].to(device=lm_w.device, dtype=lm_w.dtype)
+        )
+    logger.info("partial_state.pt 주입 완료 (커스텀 토큰 %d개)", len(new_token_ids))
+
+    return model, tokenizer
 
 
 def load_model_for_inference(
@@ -72,9 +143,10 @@ def _load_adapters_mode(
 ) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
     """Hub NF4 + partial_state.pt + adapter 체인으로 모델을 구성한다.
 
-    adapters 리스트의 순서대로 adapter를 적용한다:
-        - 중간 adapter: base에 merge_and_unload()로 병합 (효과를 base에 누적)
-        - 마지막 adapter: PeftModel로 로드 (forward 패스에 DoRA 효과 적용)
+    adapters 리스트의 순서대로 named adapter를 적재한다.
+    모든 adapter는 merge 없이 독립적으로 유지되며 PEFT의 named adapter API로 관리된다:
+        - 첫 번째 adapter: PeftModel.from_pretrained()으로 로드
+        - 이후 adapter: model.load_adapter()로 추가 로드
 
     Args:
         cfg: Hydra DictConfig. cfg.model.hub_id, cfg.model.pre_stage_dir,
@@ -91,25 +163,24 @@ def _load_adapters_mode(
     if not partial_state_path.exists():
         raise FileNotFoundError(f"partial_state.pt를 찾을 수 없음: {partial_state_path}")
 
-    logger.info(f"Hub 모델 로드 + partial_state.pt 주입: {cfg.model.hub_id}")
-    model, tokenizer = load_model_with_partial_state(cfg, partial_state_path)
+    logger.info("Hub 모델 로드 + partial_state.pt 주입: %s", cfg.model.hub_id)
+    model, tokenizer = _load_base_with_partial_state(cfg, partial_state_path)
 
-    adapters = list(cfg.inference.adapters)
+    adapters = list(cfg.inference.get("adapters", None) or [])
     if not adapters:
         logger.warning("inference.adapters가 비어있음. partial_state만 주입된 base model 반환.")
         return model, tokenizer
 
-    for i, adapter_cfg in enumerate(adapters):
-        adapter_path = Path(adapter_cfg.path)
-        adapter_name = adapter_cfg.get("name", f"adapter_{i}")
-        is_last = (i == len(adapters) - 1)
+    for i, adapter_entry in enumerate(adapters):
+        adapter_path = Path(adapter_entry.path)
+        adapter_name = adapter_entry.get("name", f"adapter_{i}")
 
         if not adapter_path.exists():
             raise FileNotFoundError(f"adapter 디렉토리를 찾을 수 없음: {adapter_path}")
 
-        if is_last:
-            # 마지막 adapter: PeftModel로 로드하여 forward 패스에 DoRA 효과 유지
-            logger.info(f"마지막 adapter 로드 (PeftModel): {adapter_path}")
+        if i == 0:
+            # 첫 번째 adapter: PeftModel 래퍼 생성 (adapter_config.json에서 LoRA 구조 자동 복원)
+            logger.info("첫 번째 adapter 로드 (PeftModel.from_pretrained): %s", adapter_path)
             model = PeftModel.from_pretrained(
                 model,
                 str(adapter_path),
@@ -117,16 +188,11 @@ def _load_adapters_mode(
                 is_trainable=False,
             )
         else:
-            # 중간 adapter: base에 merge하여 효과를 누적한 뒤 다음 adapter 적용 준비
-            logger.info(f"중간 adapter 로드 후 base에 merge: {adapter_path}")
-            peft_model = PeftModel.from_pretrained(
-                model,
-                str(adapter_path),
-                adapter_name=adapter_name,
-                is_trainable=False,
-            )
-            model = peft_model.merge_and_unload()
-            logger.info(f"adapter '{adapter_name}' merge 완료")
+            # 추가 adapter: 기존 PeftModel에 named adapter로 적재
+            logger.info("추가 adapter 로드 (load_adapter): %s", adapter_path)
+            model.load_adapter(str(adapter_path), adapter_name=adapter_name)
+
+        logger.info("adapter '%s' 로드 완료", adapter_name)
 
     # Mod Record: PeftModel.from_pretrained으로 로드한 adapter 가중치와
     # attention bias가 float32로 유지될 수 있다. NF4 Params4bit를 제외한
