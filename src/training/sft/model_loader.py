@@ -68,6 +68,27 @@ def load_model_and_tokenizer(
     lora_config = _build_lora_config(cfg.lora)
     model = get_peft_model(model, lora_config)
 
+    # Mod Record: GRPO model_loader.py에는 이미 있는 패턴이나 SFT에는 누락되어 있었음(ba5dff1).
+    # prepare_model_for_kbit_training이 layernorm을 fp32로, get_peft_model이
+    # LoRA adapter(lora_A, lora_B)를 fp32로 초기화한다. GRPO와 동일하게 bf16으로 통일.
+    try:
+        from bitsandbytes.nn import Params4bit as _Params4bit
+    except ImportError:
+        _Params4bit = None
+
+    cast_count = 0
+    for param in model.parameters():
+        if _Params4bit is not None and isinstance(param, _Params4bit):
+            continue  # NF4 양자화 파라미터는 건드리지 않음
+        if param.data.dtype == torch.float32:
+            param.data = param.data.to(torch.bfloat16)
+            cast_count += 1
+    logger.info(f"비양자화 float32 파라미터 bf16 캐스팅 완료: {cast_count}개")
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    logger.info("CUDA 캐시 해제 완료 (PEFT setup 잔류 텐서 반환)")
+
     # 훈련 가능 파라미터 수 출력
     model.print_trainable_parameters()
 
