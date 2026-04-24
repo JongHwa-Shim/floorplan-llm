@@ -258,9 +258,8 @@ def build_condition_with_augmentation(
     """
     condition_tokens, output_tokens = pipeline(raw_sample)
     aug_summary = pipeline.augmented_summary()
-    # Mod Record: AugmentationPipeline이 last_augmented_sample을 저장하지 않으므로
-    # pipeline 호출 후 raw_sample(columnar)을 row-oriented로 변환해 시각화용 샘플로 사용.
-    # 셔플/플립 등 변형 증강은 condition_tokens에 반영되어 있으나 시각화 샘플에는 미반영됨.
+    # pipeline.__call__ 내부에서 기하학적 변형까지 완료된 샘플을 last_augmented_sample에 저장한다.
+    # getattr 폴백은 호환성 보호용 — 정상 경로에서는 항상 last_augmented_sample이 존재한다.
     augmented_sample = getattr(pipeline, "last_augmented_sample", None) or to_row_oriented(raw_sample)
     drop_state = pipeline.last_drop_state
     return condition_tokens, output_tokens, aug_summary, augmented_sample, drop_state
