@@ -35,17 +35,19 @@ floorplan-llm/
 │   ├── build_model/
 │   │   └── tokenization/           # 어휘(Vocabulary) 빌드 설정
 │   │       └── pipeline.yaml
-│   └── training/
-│       ├── augmentation/           # 데이터 증강 프리셋 (Hydra config group)
-│       │   ├── pre_stage.yaml      # Pre-Stage용 증강 설정 → cfg.augmentation으로 병합
-│       │   ├── sft.yaml            # SFT용 증강 설정 → cfg.augmentation으로 병합
-│       │   └── validate_augmentation/  # validate_augmentation.py 실행 설정
-│       │       ├── pipeline.yaml       # 스크립트 전반 설정 (model, data, validate)
-│       │       └── augmentation.yaml   # 검증에 사용할 증강 파라미터
-│       ├── pre_stage/              # Pre-Stage 훈련 설정
-│       │   └── pipeline.yaml       # defaults로 training/augmentation: pre_stage 합성
-│       └── sft/                    # SFT 훈련 설정
-│           └── pipeline.yaml       # LoRA, 학습률, hub_id/model_dir (final_checkpoints/pre_stage) 등
+│   ├── training/
+│   │   ├── augmentation/           # 데이터 증강 프리셋 (Hydra config group)
+│   │   │   ├── pre_stage.yaml      # Pre-Stage용 증강 설정 → cfg.augmentation으로 병합
+│   │   │   ├── sft.yaml            # SFT용 증강 설정 → cfg.augmentation으로 병합
+│   │   │   └── validate_augmentation/  # validate_augmentation.py 실행 설정
+│   │   │       ├── pipeline.yaml       # 스크립트 전반 설정 (model, data, validate)
+│   │   │       └── augmentation.yaml   # 검증에 사용할 증강 파라미터
+│   │   ├── pre_stage/              # Pre-Stage 훈련 설정
+│   │   │   └── pipeline.yaml       # defaults로 training/augmentation: pre_stage 합성
+│   │   └── sft/                    # SFT 훈련 설정
+│   │       └── pipeline.yaml       # LoRA, 학습률, hub_id/model_dir (final_checkpoints/pre_stage) 등
+│   └── inference/                  # 추론 설정
+│       └── pipeline.yaml           # 모델 로드 모드, 입력 소스, 생성 파라미터, 출력 설정
 │
 ├── src/                            # 핵심 모듈 (uv 패키지로 설치)
 │   ├── build_dataset/
@@ -82,6 +84,12 @@ floorplan-llm/
 │   │   └── sft/                    # SFT 훈련 모듈
 │   │       ├── model_loader.py     # HF Hub base model + partial_state.pt 가중치 주입 + LoRA 적용
 │   │       └── trainer.py          # TrainingArguments + 표준 Trainer 빌드
+│   ├── inference/                  # 추론 모듈
+│   │   ├── model_loader.py         # Hub NF4 + partial_state.pt 주입 + LoRA adapter 스태킹
+│   │   ├── condition_builder.py    # 입력 소스별 샘플 로드 + 증강 적용 + condition 토큰 빌드
+│   │   ├── generator.py            # Chat Template 적용 + model.generate() 호출
+│   │   ├── output_parser.py        # 생성 토큰 → 구조화 딕셔너리 역변환
+│   │   └── result_saver.py         # 결과 JSON / 이미지 / 토큰 저장
 │   └── utils/                      # 범용 유틸리티
 │       └── extract_partial_state.py  # merged model.safetensors → partial_state.pt 추출
 │
@@ -99,6 +107,8 @@ floorplan-llm/
 │   │   │   └── validate_augmentation.py # 증강 결과 검증
 │   │   ├── run_pre_stage.py        # Pre-Stage 훈련 실행
 │   │   └── run_sft.py              # SFT 훈련 실행 (HF Hub + partial_state.pt + LoRA adapter 저장)
+│   ├── inference/
+│   │   └── run_inference.py        # 추론 실행 (입력 소스 선택, 다중 출력, 결과 저장)
 │   └── utils/
 │       └── extract_partial_state.py  # merged model.safetensors → partial_state.pt 추출 CLI
 │
@@ -113,6 +123,8 @@ floorplan-llm/
 │   │   │   └── validate_save_and_load.py   # 저장/로드 후 optimizer 업데이트 정상 동작 검증
 │   │   └── sft/
 │   │       └── validate_sft.py             # SFT 통합 검증 (로드·LoRA구조·훈련·저장·Resume)
+│   ├── inference/
+│   │   └── validate_inference.py           # 추론 통합 검증 (import·모델 로드·토큰 생성·파싱)
 │   └── utils/
 │       └── test_extract_partial_state.py   # extract_partial_state 단위/통합 검증
 │
@@ -128,6 +140,7 @@ floorplan-llm/
 │           ├── tokenization/                   # 확장된 토크나이저 + vocab
 │           ├── final_checkpoints/              # 수동 관리 최종 버전 (훈련 run final과 분리)
 │           │   └── pre_stage/                  # Pre-Stage 완료 후 수동 복사 (SFT 입력)
+│           ├── merged_checkpoints/             # merge_lora 유틸로 생성한 standalone full model (merged 로드 모드용)
 │           └── checkpoints/
 │               ├── pre_stage/                  # Pre-Stage 훈련 run 체크포인트
 │               │   ├── checkpoint-*/           # 에폭별 자동 저장 체크포인트
@@ -136,10 +149,16 @@ floorplan-llm/
 │                   ├── checkpoint-*/           # 에폭별 자동 저장 (adapter_model.safetensors)
 │                   └── final/                  # 훈련 run 최종 체크포인트 (adapter + optimizer)
 │
-├── outputs/                        # Hydra 실행 로그 + 설정 스냅샷
-│   └── training/
-│       └── pre_stage/              # Pre-Stage 실행 로그 (scripts/training/pre_stage 계층과 동일)
-│           └── YYYY-MM-DD/HH-MM-SS/
+├── outputs/                        # Hydra 실행 로그 + 추론 결과
+│   ├── training/
+│   │   └── pre_stage/              # Pre-Stage 실행 로그 (scripts/training/pre_stage 계층과 동일)
+│   │       └── YYYY-MM-DD/HH-MM-SS/
+│   └── inference/
+│       └── {model.name}/{training_stage}/{plan_id}/  # 추론 결과 (입력 조건 + 출력 평면도)
+│           ├── input/              # condition.json, tokens.txt, floorplan.png
+│           ├── output/             # floorplan.json, tokens.txt, floorplan.png (num_outputs=1)
+│           ├── output_0/ output_1/ # num_outputs>1 시 인덱스별 서브디렉토리
+│           └── meta.json           # plan_id, 토큰 수, 소요 시간, 파싱 성공 여부
 └── docs/                           # 문서
     ├── README.md                   # 이 파일
     └── Docs.md                     # 상세 설계 문서
@@ -223,10 +242,10 @@ PNG (RPLAN 데이터셋)
 [Step 5] DPO → GRPO (구현 예정) → 평면도 생성 모델
         │
         ▼
-[Step 6] 추론 + 시각화 (예정) → 평면도 이미지
+[Step 6] 추론 + 시각화 → 평면도 이미지
 ```
 
-> **현재 구현 완료 범위:** Step 1 ~ Step 4, Pre-Stage, SFT
+> **현재 구현 완료 범위:** Step 1 ~ Step 4, Pre-Stage, SFT, Step 6 (추론)
 
 ---
 
@@ -425,6 +444,73 @@ data/models/{model.name}/checkpoints/sft/
     ├── trainer_state.json
     └── tokenizer.json 등
 ```
+
+---
+
+### Step 6: 추론 실행
+
+훈련된 모델을 로드하고 입력 조건에 대해 평면도 토큰 시퀀스를 생성한다. 결과는 JSON, 텍스트 토큰, 이미지로 저장된다.
+
+**모델 로드 모드:**
+- `adapters` (권장): HF Hub에서 base model 로드 → `partial_state.pt` 커스텀 토큰 주입 → LoRA adapter 스태킹
+- `merged`: 사전 병합된 standalone full model 직접 로드 (`merged_checkpoints/` 디렉토리)
+
+**입력 소스:**
+- `jsonl_file`: 단일 JSONL 파일에서 샘플 로드
+- `jsonl_dir`: JSONL 디렉토리 전체 일괄 처리
+- `arrow`: HuggingFace Arrow 데이터셋에서 특정 split 사용
+- `txt_dir`: 사전 증강된 토큰 텍스트 파일 디렉토리 (파일 1개 = 입력 조건 1개)
+
+```bash
+# 기본 실행 (JSONL 파일 30개, 증강 적용, do_sample=true)
+uv run python scripts/inference/run_inference.py
+
+# pre-stage base model (adapters 없이, adapter 목록 비워둠)
+uv run python scripts/inference/run_inference.py \
+    model.training_stage=pre_stage
+
+# SFT adapter 적용
+uv run python scripts/inference/run_inference.py \
+    model.training_stage=sft \
+    "inference.adapters=[{path: data/models/Qwen2.5-Coder-7B/final_checkpoints/sft, name: sft}]"
+
+# Arrow test split, 10개, 3개 출력 (sampling 모드)
+uv run python scripts/inference/run_inference.py \
+    input.mode=arrow input.max_samples=10 \
+    generation.num_outputs=3 \
+    generation.do_sample=true generation.temperature=0.8
+
+# 특정 plan_id만 처리
+uv run python scripts/inference/run_inference.py \
+    'input.plan_ids=[fp_00001,fp_00005]'
+
+# 텍스트 파일 입력 모드 (증강 미적용)
+uv run python scripts/inference/run_inference.py input.mode=txt_dir
+
+# greedy 생성 (do_sample=false)
+uv run python scripts/inference/run_inference.py \
+    generation.do_sample=false generation.num_beams=1
+
+# 증강 비활성화 (full condition 그대로 사용)
+uv run python scripts/inference/run_inference.py augmentation.enabled=false
+```
+
+**출력 디렉토리 구조 (`outputs/inference/{model.name}/{training_stage}/`):**
+
+```
+{plan_id}/
+├── input/
+│   ├── tokens.txt          # 조건 토큰 텍스트
+│   ├── condition.json      # 조건 구조화 JSON
+│   └── floorplan.png       # 입력 조건 시각화
+├── output/                 # num_outputs=1
+│   ├── tokens.txt          # 생성 토큰 텍스트
+│   ├── floorplan.json      # 역변환된 평면도 JSON
+│   └── floorplan.png       # 생성 결과 시각화
+└── meta.json               # plan_id, 토큰 수, 소요 시간, 파싱 성공 여부
+```
+
+> `num_outputs>1`이면 `output_0/`, `output_1/`, … 형태로 인덱스별 저장된다.
 
 ---
 
@@ -698,6 +784,6 @@ You are a floor plan generator. Given room conditions, generate complete floorpl
 | Pre-Stage | 새 토큰 Embedding 워밍업 훈련 | ✅ 완료 |
 | SFT | LoRA Fine-tuning (attention/MLP 전 레이어) | ✅ 완료 |
 | Step 5 | DPO → GRPO Fine-tuning | 🔜 구현 예정 |
-| Step 6 | 추론 + 시각화 | 🔜 구현 예정 |
+| Step 6 | 추론 + 시각화 (adapters/merged 모드, 4개 입력 소스) | ✅ 완료 |
 
 자세한 설계 내용은 [Docs.md](Docs.md)를 참고.

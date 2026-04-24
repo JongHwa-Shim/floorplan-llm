@@ -17,7 +17,7 @@
 9. [Step 4: 데이터 증강 + 토크나이징](#9-step-4-데이터-증강--토크나이징)
 10. [Pre-Stage: 새 토큰 Embedding 워밍업](#10-pre-stage-새-토큰-embedding-워밍업)
 11. [Step 5: LLM 학습](#11-step-5-llm-학습)
-12. [Step 6: 추론 및 시각화 (구현 예정)](#12-step-6-추론-및-시각화-구현-예정)
+12. [Step 6: 추론 및 시각화](#12-step-6-추론-및-시각화)
 
 ---
 
@@ -46,7 +46,7 @@
 ② LLM 훈련
    Pretrained LLM + 커스텀 토큰 → Pre-Stage → 3-Stage Fine-tune (SFT → DPO → GRPO) → 평면도 생성 모델
 
-③ 생성 결과 시각화 (구현 예정)
+③ 추론 + 시각화
    조건 입력 → 모델 추론 → 토큰 시퀀스 → 좌표 복원 → 평면도 시각화
 ```
 
@@ -287,7 +287,7 @@ Chat template으로 구성된 전체 시퀀스에서 **system + user 턴(입력)
 └──────────────────────────┬───────────────────────────┘
                            ▼
 ┌──────────────────────────────────────────────────────┐
-│  Step 6: 추론 + 시각화 (구현 예정)                     │
+│  Step 6: 추론 + 시각화                                  │
 │  조건 입력 → 토큰 시퀀스 → 좌표 복원 → 평면도 이미지    │
 └──────────────────────────────────────────────────────┘
 ```
@@ -301,7 +301,7 @@ Chat template으로 구성된 전체 시퀀스에서 **system + user 턴(입력)
 | Pre-Stage | 새 토큰 Embedding 워밍업 | 토큰 시퀀스 배치 | 워밍업된 embed_tokens + lm_head |
 | SFT | LoRA Fine-tuning | HF Hub base model + `partial_state.pt` + 토큰 시퀀스 배치 | LoRA adapter Fine-tuned 모델 |
 | 5 | DPO → GRPO (예정) | 토큰 시퀀스 배치 | Fine-tuned 모델 |
-| 6 | 추론 + 시각화 (예정) | 조건 텍스트 | 평면도 이미지 |
+| 6 | 추론 + 시각화 | 조건 입력 (JSONL/Arrow/txt) | 평면도 JSON + 토큰 텍스트 + 이미지 |
 
 ---
 
@@ -869,24 +869,103 @@ RLVR 기반 강화학습으로 규칙 기반 보상 함수를 적용한다. 방 
 
 ---
 
-## 12. Step 6: 추론 및 시각화 (구현 예정)
+## 12. Step 6: 추론 및 시각화
 
-### 추론 흐름 (계획)
+### 추론 흐름
 
 ```
-1. 사용자 조건 입력 (자연어 또는 구조화된 조건)
-2. 조건을 condition_tokens로 변환
-3. 모델 자동회귀 생성
-4. 생성된 토큰 시퀀스를 JSONL 구조로 역변환 (decoder.py 활용)
-5. 좌표 복원 및 평면도 시각화 (visualize_json 모듈 활용)
+1. 입력 소스에서 평면도 샘플 로드 (JSONL / Arrow / txt_dir)
+2. AugmentationPipeline으로 condition_tokens 생성 (훈련과 동일한 증강)
+3. condition_tokens → Chat Template 적용 → input_ids
+4. model.generate()로 output 토큰 시퀀스 생성
+5. 생성된 토큰 → output_parser.py로 구조화 딕셔너리 역변환
+6. result_saver.py로 JSON + 텍스트 토큰 + 이미지 저장
 ```
 
-### 시각화
+### 모델 로드 모드
 
-`visualize_json` 모듈은 JSONL 형식의 평면도 데이터를 OpenCV로 렌더링하는 기능을 이미 구현하고 있으며, 모델 추론 결과 시각화에 재사용될 예정이다.
+| 모드 | 방식 | 용도 |
+|------|------|------|
+| `adapters` (권장) | HF Hub NF4 + `partial_state.pt` 주입 + PEFT named adapter 스태킹 | adapter 파일만으로 추론 |
+| `merged` | 사전 병합된 standalone bf16 full model 직접 로드 | `merge_model.py` 유틸로 사전 생성 필요 |
 
-```bash
-# 현재 사용 가능: JSONL 시각화
-uv run python tests/build_dataset/rplan2json/visualize_jsonl.py --plan_id 0 1 5
-uv run python tests/build_dataset/rplan2json/visualize_jsonl.py --all
+**adapters 모드 로드 흐름:**
+
 ```
+1. AutoTokenizer.from_pretrained(tokenizer_dir)
+2. AutoModelForCausalLM.from_pretrained(hub_id, quantization_config=NF4, dtype=bfloat16)
+   → resize_token_embeddings(len(tokenizer))
+3. partial_state.pt 로드 → embed_tokens/lm_head의 new_token_ids 행에 직접 주입
+   (embed_tokens/lm_head는 NF4 양자화 대상이 아닌 bf16 레이어)
+4. PeftModel.from_pretrained(model, adapter_path, adapter_name=name)  # 첫 번째 adapter
+5. model.load_adapter(adapter_path, adapter_name=name)                # 이후 adapter들
+   (adapter_config.json 자동 파싱 — LoRA/DoRA 투명하게 처리)
+6. float32 파라미터 bf16 일괄 캐스팅 (PEFT가 attention bias를 float32로 유지하는 문제 대응)
+```
+
+> **PEFT named adapter 방식:** 중간 adapter를 `merge_and_unload()` 없이 모두 named adapter로 독립 유지한다. `adapter_config.json`을 읽어 LoRA/DoRA 구조를 자동 복원하므로 코드 변경 없이 두 방식을 모두 지원한다.
+
+### 입력 소스
+
+| 모드 | 설명 | 포맷 변환 |
+|------|------|---------|
+| `jsonl_file` | 단일 JSONL 파일 | `_jsonl_to_columnar()` → Arrow columnar로 변환 후 AugmentationPipeline 전달 |
+| `jsonl_dir` | JSONL 디렉토리 전체 | 동일 |
+| `arrow` | HuggingFace Arrow 데이터셋 특정 split | 변환 없이 직접 전달 |
+| `txt_dir` | 사전 증강된 토큰 텍스트 파일 (파일 1개=입력 1개) | `parse_input_tokens()`로 구조화 dict 생성, 증강 미적용 |
+
+> **JSONL ↔ Arrow 포맷 차이:** JSONL의 `rooms`는 list-of-dicts이지만 `AugmentationPipeline` 내부의 `to_row_oriented()`는 Arrow columnar 포맷(dict-of-lists)만 처리한다. `_jsonl_to_columnar()`가 추론 코드 내부에서 변환을 수행하며 훈련 코드(`src/training/`)는 수정하지 않는다.
+
+### 생성 설정
+
+| 파라미터 | 기본값 | 설명 |
+|---------|--------|------|
+| `max_new_tokens` | `2048` | 최대 생성 토큰 수 |
+| `do_sample` | `true` | 샘플링 여부 (false=greedy) |
+| `temperature` | `1.0` | 샘플링 온도 |
+| `top_p` | `0.95` | nucleus sampling |
+| `num_beams` | `1` | beam search 너비 (1=greedy/sampling) |
+| `repetition_penalty` | `1.0` | 반복 억제 |
+| `num_outputs` | `2` | 동일 조건에 대해 생성할 출력 수 |
+
+**EOS 처리:** `<|im_end|>` + `<|endoftext|>` + `<END_OUTPUT>` 세 토큰을 모두 EOS로 등록한다. Qwen2.5 Chat Template의 assistant 턴 종료 토큰(`<|im_end|>`)과 커스텀 평면도 종료 토큰(`<END_OUTPUT>`)이 다르기 때문이다.
+
+### 추론 성능 (Qwen2.5-Coder-7B, NF4, 단일 GPU)
+
+| 구성 | 생성 속도 | 비고 |
+|------|---------|------|
+| Pre-Stage base (adapter 없음) | ~30 tok/s | NF4 base만 사용 |
+| SFT DoRA adapter | ~3.5 tok/s | DoRA의 컬럼-노름 재계산 오버헤드 (~8.6× 느림) |
+| SFT LoRA adapter (예상) | ~30 tok/s | LoRA는 forward 중 행렬 추가 연산만 발생 |
+
+> **DoRA 속도 저하 원인:** DoRA는 forward 패스마다 적응된 전체 가중치 행렬 `(W + lora_B @ lora_A × scale)`을 구체화하고 컬럼 노름을 계산한다. LoRA에 비해 추론 비용이 크게 증가한다. PEFT가 `adapter_config.json`을 읽어 DoRA/LoRA를 투명하게 처리하므로 코드 레벨에서는 차이가 없다.
+
+### 결과 저장 구조
+
+```
+outputs/inference/{model.name}/{training_stage}/{plan_id}/
+├── input/
+│   ├── tokens.txt          # 증강이 적용된 조건 토큰 텍스트
+│   ├── condition.json      # 조건 구조화 JSON
+│   └── floorplan.png       # 입력 조건 시각화 (drop된 요소 반영)
+├── output/                 # num_outputs=1
+│   ├── tokens.txt          # 생성 토큰 텍스트
+│   ├── floorplan.json      # 역변환된 평면도 JSON
+│   └── floorplan.png       # 생성 결과 시각화
+└── meta.json               # plan_id, 토큰 수, 소요 시간, 파싱 성공 여부
+```
+
+> `num_outputs>1`이면 `output_0/`, `output_1/`, … 형태로 인덱스별 저장.
+
+### 주요 모듈
+
+| 파일 | 역할 |
+|------|------|
+| `src/inference/model_loader.py` | adapters/merged 모드 분기, NF4 + partial_state.pt 주입, PEFT named adapter 스태킹 |
+| `src/inference/condition_builder.py` | 입력 소스별 샘플 로드, `_jsonl_to_columnar()` 변환, AugmentationPipeline 적용 |
+| `src/inference/generator.py` | Chat Template 구성, `model.generate()` 호출, EOS 후처리 |
+| `src/inference/output_parser.py` | 생성 토큰 ID → 구조화 평면도 딕셔너리 역변환 |
+| `src/inference/result_saver.py` | JSON / 토큰 텍스트 / PNG 이미지 저장, DropState 기반 입력 시각화 필터링 |
+| `scripts/inference/run_inference.py` | Hydra 진입점, 배치 추론, seed 고정 |
+| `config/inference/pipeline.yaml` | 모델 로드 모드, 입력 소스, 생성 파라미터, 출력 설정 |
+| `tests/inference/validate_inference.py` | import·모델 로드·토큰 생성·파싱 통합 검증 |
