@@ -27,14 +27,17 @@
         model.training_stage=grpo
 
 출력 디렉토리 구조:
-    outputs/inference/{model.name}/{model.training_stage}/{plan_id}/
-    ├── input/
-    │   ├── tokens.txt, condition.json, floorplan.png
-    ├── output/            (num_outputs=1)
-    │   ├── tokens.txt, floorplan.json, floorplan.png
-    ├── output_0/          (num_outputs>1)
-    ├── output_1/
-    └── meta.json
+    outputs/inference/{model.name}/{model.training_stage}/{YYYY-MM-DD}/{HH-MM-SS}/
+    ├── .hydra/            (Hydra 설정 스냅샷)
+    ├── run_inference.log  (실행 로그)
+    └── {plan_id}/
+        ├── input/
+        │   ├── tokens.txt, condition.json, floorplan.png
+        ├── output/            (num_outputs=1)
+        │   ├── tokens.txt, floorplan.json, floorplan.png
+        ├── output_0/          (num_outputs>1)
+        ├── output_1/
+        └── meta.json
 """
 
 import logging
@@ -47,6 +50,7 @@ from pathlib import Path
 import hydra
 import numpy as np
 import torch
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 
@@ -143,9 +147,10 @@ def main(cfg: DictConfig) -> None:
     )
     logger.info("처리 대상: %d개 샘플", len(row_samples))
 
-    # 출력 디렉토리: {output.dir}/{model.name}/{training_stage}/[txt_input/]
+    # 출력 디렉토리: Hydra run.dir 기준 (outputs/inference/{model.name}/{training_stage}/{date}/)
+    # Hydra 설정 스냅샷·로그와 추론 결과가 동일한 날짜 폴더 아래 저장됨
     # txt_dir 모드는 별도 서브디렉토리로 분리하여 다른 입력 모드 결과와 혼재 방지
-    output_dir = Path(cfg.output.dir) / cfg.model.name / cfg.model.training_stage
+    output_dir = Path(HydraConfig.get().run.dir)
     if is_txt_mode:
         output_dir = output_dir / "txt_input"
     output_dir.mkdir(parents=True, exist_ok=True)
