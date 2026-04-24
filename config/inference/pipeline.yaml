@@ -4,6 +4,10 @@
 #   "adapters": Hub NF4 + partial_state.pt + adapter 체인 (stage별 adapter 스태킹)
 #   "merged":   pre-merged full model 직접 로드 (merge_model.py 유틸로 사전 생성)
 
+hydra:
+  run:
+    dir: outputs/inference/${model.name}/${model.training_stage}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
 model:
   user: "Qwen"
   name: "Qwen2.5-Coder-7B"
@@ -30,13 +34,21 @@ inference:
   # adapters 모드에서 적재할 adapter 목록 (순서대로 적용)
   # 모든 adapter는 merge 없이 named adapter로 유지됨 (PEFT load_adapter API 사용)
   # 비어있으면 partial_state만 주입된 pre-stage base model로 추론
-  adapters: []
+  adapters: 
+    - path: "data/models/Qwen2.5-Coder-7B/checkpoints/sft/checkpoint-35133"
+      name: "sft"
   # 예시:
-  #   - path: "data/models/${model.name}/final_checkpoints/sft"
-  #     name: "sft"
-  # GRPO까지 적용하려면:
-  #   - path: "data/models/${model.name}/final_checkpoints/grpo"
-  #     name: "grpo"
+  # pre-stasge 모델 사용 (빈 어댑터 리스트)
+  # adapters: []
+
+  # sft 모델 사용
+  # adapters: 
+    # - path: "data/models/${model.name}/final_checkpoints/sft"
+    #   name: "sft"
+
+  # GRPO까지 적용하려면 sft 모델에 이것까지 더해주기
+    # - path: "data/models/${model.name}/final_checkpoints/grpo"
+    #   name: "grpo"
 
 # 입력 설정
 input:
@@ -45,7 +57,7 @@ input:
   # "arrow":      Arrow 데이터셋에서 특정 split 사용
   # "txt_dir":    증강 완료된 토큰 텍스트 파일 디렉토리 (파일 1개 = 입력 조건 1개)
   mode: "jsonl_file"
-  jsonl_file: "data/dataset/processed_dataset/rplan/jsonl/floorplans_0000.jsonl"
+  jsonl_file: "data/dataset/processed_dataset/rplan/jsonl/floorplans_0001.jsonl"
   jsonl_dir: "data/dataset/processed_dataset/rplan/jsonl"
   jsonl_pattern: "floorplans_*.jsonl"
   arrow_dir: "data/dataset/processed_dataset/rplan/arrow"
@@ -53,7 +65,7 @@ input:
   txt_dir: "data/inference/input_txt"
   txt_pattern: "*.txt"
   plan_ids: null # JSONL 모드에서 처리할 plan_id 리스트 (null이면 전체 처리)
-  max_samples: 30
+  max_samples: 20
 
 # 증강 설정 (훈련 시와 동일한 AugmentationPipeline 사용)
 augmentation:
@@ -76,7 +88,7 @@ generation:
   top_k: 50
   num_beams: 1
   repetition_penalty: 1.0
-  num_outputs: 2
+  num_outputs: 20
 
 # 시각화 색상 설정
 color_map_path: "config/build_dataset/visualize_json/color_map.yaml"

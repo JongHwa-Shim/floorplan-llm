@@ -153,14 +153,19 @@ floorplan-llm/
 │
 ├── outputs/                        # Hydra 실행 로그 + 추론 결과
 │   ├── training/
-│   │   └── pre_stage/              # Pre-Stage 실행 로그 (scripts/training/pre_stage 계층과 동일)
+│   │   ├── pre_stage/              # Pre-Stage 실행 로그
+│   │   │   └── YYYY-MM-DD/HH-MM-SS/
+│   │   └── sft/                    # SFT 실행 로그
 │   │       └── YYYY-MM-DD/HH-MM-SS/
 │   └── inference/
-│       └── {model.name}/{training_stage}/{plan_id}/  # 추론 결과 (입력 조건 + 출력 평면도)
-│           ├── input/              # condition.json, tokens.txt, floorplan.png
-│           ├── output/             # floorplan.json, tokens.txt, floorplan.png (num_outputs=1)
-│           ├── output_0/ output_1/ # num_outputs>1 시 인덱스별 서브디렉토리
-│           └── meta.json           # plan_id, 토큰 수, 소요 시간, 파싱 성공 여부
+│       └── {model.name}/{training_stage}/{YYYY-MM-DD}/{HH-MM-SS}/  # 날짜별 실행 디렉토리 (Hydra 로그 포함)
+│           ├── .hydra/             # Hydra 설정 스냅샷 (config.yaml, overrides.yaml 등)
+│           ├── run_inference.log   # 실행 로그
+│           └── {plan_id}/          # 추론 결과 (입력 조건 + 출력 평면도)
+│               ├── input/              # condition.json, tokens.txt, floorplan.png
+│               ├── output/             # floorplan.json, tokens.txt, floorplan.png (num_outputs=1)
+│               ├── output_0/ output_1/ # num_outputs>1 시 인덱스별 서브디렉토리
+│               └── meta.json           # plan_id, 토큰 수, 소요 시간, 파싱 성공 여부
 └── docs/                           # 문서
     ├── README.md                   # 이 파일
     └── Docs.md                     # 상세 설계 문서
@@ -497,19 +502,24 @@ uv run python scripts/inference/run_inference.py \
 uv run python scripts/inference/run_inference.py augmentation.enabled=false
 ```
 
-**출력 디렉토리 구조 (`outputs/inference/{model.name}/{training_stage}/`):**
+**출력 디렉토리 구조 (`outputs/inference/{model.name}/{training_stage}/{YYYY-MM-DD}/{HH-MM-SS}/`):**
+
+Hydra 실행 로그·설정 스냅샷과 추론 결과가 동일한 날짜/시간 폴더 아래 저장된다.
 
 ```
-{plan_id}/
-├── input/
-│   ├── tokens.txt          # 조건 토큰 텍스트
-│   ├── condition.json      # 조건 구조화 JSON
-│   └── floorplan.png       # 입력 조건 시각화
-├── output/                 # num_outputs=1
-│   ├── tokens.txt          # 생성 토큰 텍스트
-│   ├── floorplan.json      # 역변환된 평면도 JSON
-│   └── floorplan.png       # 생성 결과 시각화
-└── meta.json               # plan_id, 토큰 수, 소요 시간, 파싱 성공 여부
+outputs/inference/{model.name}/{training_stage}/{YYYY-MM-DD}/{HH-MM-SS}/
+├── .hydra/             # Hydra 설정 스냅샷 (config.yaml, overrides.yaml 등)
+├── run_inference.log   # 실행 로그
+└── {plan_id}/
+    ├── input/
+    │   ├── tokens.txt          # 조건 토큰 텍스트
+    │   ├── condition.json      # 조건 구조화 JSON
+    │   └── floorplan.png       # 입력 조건 시각화
+    ├── output/                 # num_outputs=1
+    │   ├── tokens.txt          # 생성 토큰 텍스트
+    │   ├── floorplan.json      # 역변환된 평면도 JSON
+    │   └── floorplan.png       # 생성 결과 시각화
+    └── meta.json               # plan_id, 토큰 수, 소요 시간, 파싱 성공 여부
 ```
 
 > `num_outputs>1`이면 `output_0/`, `output_1/`, … 형태로 인덱스별 저장된다.
@@ -680,6 +690,7 @@ model:
 
 | 파라미터 | 기본값 | 설명 |
 |---------|--------|------|
+| `hydra.run.dir` | `outputs/training/sft/${now:%Y-%m-%d}/${now:%H-%M-%S}` | Hydra 로그·설정 스냅샷 저장 경로 |
 | `model.hub_id` | `${model.user}/${model.name}` | HF Hub에서 base model 로드에 사용 |
 | `model.model_dir` | `data/models/${model.name}/final_checkpoints/pre_stage` | partial_state.pt 위치 (수동 관리 최종 버전) |
 | `model.tokenizer_dir` | `data/models/${model.name}/tokenization` | 토크나이저 경로 (훈련 단계와 무관한 공통 경로) |
@@ -723,6 +734,7 @@ model:
 
 | 파라미터 | 기본값 | 설명 |
 |---------|--------|------|
+| `hydra.run.dir` | `outputs/inference/${model.name}/${model.training_stage}/${now:%Y-%m-%d}/${now:%H-%M-%S}` | Hydra 로그·설정 스냅샷 + 추론 결과 저장 기준 경로 |
 | `inference.load_mode` | `"adapters"` | `"adapters"`: Hub NF4 + partial_state.pt + adapter 스태킹. `"merged"`: standalone full model 직접 로드 |
 | `inference.adapters` | `[]` | 적재할 adapter 목록 (`{path, name}` 형태). 비어있으면 pre-stage base model로 추론 |
 | `input.mode` | `"jsonl_file"` | 입력 소스: `jsonl_file` / `jsonl_dir` / `arrow` / `txt_dir` |
@@ -732,7 +744,7 @@ model:
 | `generation.max_new_tokens` | `2048` | 최대 생성 토큰 수 |
 | `generation.do_sample` | `true` | 샘플링 여부 (false=greedy) |
 | `generation.num_outputs` | `2` | 동일 조건에 대한 출력 수 |
-| `model.training_stage` | `"sft"` | 출력 경로 레이블 (`outputs/inference/{model.name}/{training_stage}/`) |
+| `model.training_stage` | `"sft"` | 출력 경로 레이블 (`outputs/inference/{model.name}/{training_stage}/{날짜}/{시간}/`) |
 
 ---
 

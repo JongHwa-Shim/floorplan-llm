@@ -2,6 +2,10 @@
 # Pre-Stage에서 워밍업된 모델을 입력으로 LoRA를 적용한 전체 레이어 fine-tuning.
 # 모델 로드: HF Hub base model + final_checkpoints/pre_stage/partial_state.pt 적용.
 
+hydra:
+  run:
+    dir: outputs/training/sft/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
 model:
   user: "Qwen"
   name: "Qwen2.5-Coder-7B"
