@@ -529,7 +529,7 @@ output_tokens = build_output_tokens(augmented_sample, vocab)
 
 | 파일 | 역할 |
 |------|------|
-| `pipeline.py` | 증강 파이프라인 오케스트레이터 (`AugmentationPipeline`) |
+| `pipeline.py` | 증강 파이프라인 오케스트레이터 (`AugmentationPipeline`). 호출 후 `last_augmented_sample`(기하학적 변형 완료 row-oriented 샘플), `last_drop_state`, `last_applied_shuffles`를 속성으로 저장 |
 | `strategies.py` | 15+ 증강 전략 순수 함수 구현 |
 | `tokenizer.py` | `Vocab` 클래스, `build_condition_tokens()`, `build_output_tokens()` |
 | `decoder.py` | `decode_tokens()`, `format_sample_report()` (디버깅용 역변환) |
@@ -956,7 +956,7 @@ outputs/inference/{model.name}/{training_stage}/{YYYY-MM-DD}/{HH-MM-SS}/
     ├── input/
     │   ├── tokens.txt          # 증강이 적용된 조건 토큰 텍스트
     │   ├── condition.json      # 조건 구조화 JSON
-    │   └── floorplan.png       # 입력 조건 시각화 (drop된 요소 반영)
+    │   └── floorplan.png       # 입력 조건 시각화 (기하학적 변형 + drop된 요소 모두 반영)
     ├── output/                 # num_outputs=1
     │   ├── tokens.txt          # 생성 토큰 텍스트
     │   ├── floorplan.json      # 역변환된 평면도 JSON
@@ -971,7 +971,7 @@ outputs/inference/{model.name}/{training_stage}/{YYYY-MM-DD}/{HH-MM-SS}/
 | 파일 | 역할 |
 |------|------|
 | `src/inference/model_loader.py` | adapters/merged 모드 분기, NF4 + partial_state.pt 주입, PEFT named adapter 스태킹 |
-| `src/inference/condition_builder.py` | 입력 소스별 샘플 로드, `_jsonl_to_columnar()` 변환, AugmentationPipeline 적용 |
+| `src/inference/condition_builder.py` | 입력 소스별 샘플 로드, `_jsonl_to_columnar()` 변환, AugmentationPipeline 적용. 파이프라인 호출 후 `pipeline.last_augmented_sample`(기하학적 변형 완료 샘플)을 시각화용으로 사용 |
 | `src/inference/generator.py` | Chat Template 구성, `model.generate()` 호출, EOS 후처리 |
 | `src/inference/output_parser.py` | 생성 토큰 ID → 구조화 평면도 딕셔너리 역변환 |
 | `src/inference/result_saver.py` | JSON / 토큰 텍스트 / PNG 이미지 저장, DropState 기반 입력 시각화 필터링 |

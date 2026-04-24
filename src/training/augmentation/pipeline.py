@@ -212,6 +212,7 @@ class AugmentationPipeline:
         self._rng = random.Random(seed)
 
         # 마지막 호출의 증강 내역 (검증용)
+        self.last_augmented_sample: dict | None = None  # 기하학적 변형까지 완료된 row-oriented 샘플
         self.last_drop_state: DropState | None = None
         self.last_applied_shuffles: list[str] = []
 
@@ -285,6 +286,9 @@ class AugmentationPipeline:
         drop_state.noise_room_coords = compute_noise_state(sample, cfg.to_noise_params(), rng)
 
         # 마지막 호출 내역 저장 (검증용)
+        # Mod Record: 기하학적 변형이 완료된 sample을 저장해야 입력 시각화에 반영된다.
+        # drop_state는 sample을 수정하지 않으므로 변형 직후 저장해도 안전하다.
+        self.last_augmented_sample = sample
         self.last_drop_state = drop_state
         self.last_applied_shuffles = applied_shuffles
 
