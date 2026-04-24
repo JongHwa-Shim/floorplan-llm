@@ -714,6 +714,21 @@ model:
 | `resume.checkpoint_path` | `null` | 특정 체크포인트 경로 지정 (null이면 자동 탐색) |
 | `resume.auto_find_latest` | `true` | output_dir에서 최신 체크포인트 자동 탐색 |
 
+### `config/inference/pipeline.yaml`
+
+| 파라미터 | 기본값 | 설명 |
+|---------|--------|------|
+| `inference.load_mode` | `"adapters"` | `"adapters"`: Hub NF4 + partial_state.pt + adapter 스태킹. `"merged"`: standalone full model 직접 로드 |
+| `inference.adapters` | `[]` | 적재할 adapter 목록 (`{path, name}` 형태). 비어있으면 pre-stage base model로 추론 |
+| `input.mode` | `"jsonl_file"` | 입력 소스: `jsonl_file` / `jsonl_dir` / `arrow` / `txt_dir` |
+| `input.max_samples` | `30` | 처리할 최대 샘플 수 (`null`이면 전체) |
+| `input.plan_ids` | `null` | 처리할 plan_id 리스트 (`null`이면 전체) |
+| `augmentation.enabled` | `true` | 증강 활성화 여부 |
+| `generation.max_new_tokens` | `2048` | 최대 생성 토큰 수 |
+| `generation.do_sample` | `true` | 샘플링 여부 (false=greedy) |
+| `generation.num_outputs` | `2` | 동일 조건에 대한 출력 수 |
+| `model.training_stage` | `"sft"` | 출력 경로 레이블 (`outputs/inference/{model.name}/{training_stage}/`) |
+
 ---
 
 ## 데이터 저장 형식
