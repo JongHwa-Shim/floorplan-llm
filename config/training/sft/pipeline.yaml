@@ -70,4 +70,4 @@ training:
   save_total_limit: 3
   load_best_model_at_end: true
   max_steps: 0                        # 0 = 전체 epoch 기반 학습
-  output_dir: "data/models/${model.name}/checkpoints/${training.run_name}/sft"
+  output_dir: "data/models/${model.name}/checkpoints/sft/${training.run_name}
