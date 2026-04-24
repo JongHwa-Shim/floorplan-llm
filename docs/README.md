@@ -143,11 +143,13 @@ floorplan-llm/
 │           ├── merged_checkpoints/             # merge_lora 유틸로 생성한 standalone full model (merged 로드 모드용)
 │           └── checkpoints/
 │               ├── pre_stage/                  # Pre-Stage 훈련 run 체크포인트
-│               │   ├── checkpoint-*/           # 에폭별 자동 저장 체크포인트
-│               │   └── final/                  # 훈련 run 최종 체크포인트 (partial_state.pt)
+│               │   └── {run_name}/             # run_name별 독립 저장 (기본: floorplan-pre-stage)
+│               │       ├── checkpoint-*/       # 에폭별 자동 저장 체크포인트
+│               │       └── final/              # 훈련 run 최종 체크포인트 (partial_state.pt)
 │               └── sft/                        # SFT 훈련 run 체크포인트
-│                   ├── checkpoint-*/           # 에폭별 자동 저장 (adapter_model.safetensors)
-│                   └── final/                  # 훈련 run 최종 체크포인트 (adapter + optimizer)
+│                   └── {run_name}/             # run_name별 독립 저장 (기본: floorplan-sft)
+│                       ├── checkpoint-*/       # 에폭별 자동 저장 (adapter_model.safetensors)
+│                       └── final/              # 훈련 run 최종 체크포인트 (adapter + optimizer)
 │
 ├── outputs/                        # Hydra 실행 로그 + 추론 결과
 │   ├── training/
@@ -395,7 +397,7 @@ uv run python scripts/training/run_pre_stage.py \
 # 계속 훈련: 특정 체크포인트 지정
 uv run python scripts/training/run_pre_stage.py \
     resume.enabled=true \
-    resume.checkpoint_path=data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/checkpoint-500
+    resume.checkpoint_path=data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/floorplan-pre-stage/checkpoint-500
 ```
 
 ### SFT: LoRA Fine-tuning
@@ -425,12 +427,12 @@ uv run python scripts/training/run_sft.py \
 # 계속 훈련: 특정 체크포인트 지정
 uv run python scripts/training/run_sft.py \
     resume.enabled=true \
-    resume.checkpoint_path=data/models/Qwen2.5-Coder-7B/checkpoints/sft/checkpoint-500
+    resume.checkpoint_path=data/models/Qwen2.5-Coder-7B/checkpoints/sft/floorplan-sft/checkpoint-500
 ```
 
 **SFT 체크포인트 출력 구조:**
 ```
-data/models/{model.name}/checkpoints/sft/
+data/models/{model.name}/checkpoints/sft/{run_name}/
 ├── checkpoint-{step}/          # 에폭별 자동 저장 (최대 save_total_limit개 보존)
 │   ├── adapter_model.safetensors  # LoRA adapter 가중치
 │   ├── adapter_config.json        # LoRA 설정 (use_dora: false)
@@ -579,7 +581,7 @@ uv run python tests/training/pre_stage/validate_resume.py
 
 # 특정 체크포인트 지정 검증
 uv run python tests/training/pre_stage/validate_resume.py \
-    --checkpoint data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/checkpoint-80304
+    --checkpoint data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/floorplan-pre-stage/checkpoint-80304
 ```
 
 ---
@@ -601,7 +603,7 @@ uv run python tests/training/pre_stage/validate_save_and_load.py
 
 **Pre-Stage 체크포인트 출력 구조:**
 ```
-data/models/{model.name}/checkpoints/pre_stage/
+data/models/{model.name}/checkpoints/pre_stage/{run_name}/
 ├── checkpoint-{step}/          # 에폭별 자동 저장 (최대 save_total_limit개 보존)
 │   ├── partial_state.pt        # new_embed / new_lm_head 가중치 (model.safetensors 없음)
 │   ├── optimizer.pt            # AdamW state (~16MB)
@@ -685,9 +687,11 @@ model:
 | `lora.lora_alpha` | `64` | LoRA scaling factor (alpha/r=2, 실효 LR 스케일) |
 | `lora.lora_dropout` | `0.05` | adapter dropout |
 | `lora.target_modules` | `q/k/v/o_proj, gate/up/down_proj` | LoRA 적용 레이어 (attention + MLP 전부) |
+| `training.output_dir` | `data/models/${model.name}/checkpoints/sft/${training.run_name}` | 체크포인트 저장 경로 |
+| `training.run_name` | `"floorplan-sft"` | W&B run 이름 + 체크포인트 저장 서브디렉토리명 |
 | `training.learning_rate` | `2e-4` | adapter 학습률 |
 | `training.num_train_epochs` | `3` | 훈련 에폭 수 |
-| `training.gradient_accumulation_steps` | `4` | 그래디언트 누적 (실효 배치 4) |
+| `training.gradient_accumulation_steps` | `1` | 그래디언트 누적 steps |
 | `training.max_steps` | `0` | 디버그용 step 제한 (0=비활성) |
 | `resume.enabled` | `false` | 계속 훈련 활성화 여부 |
 
@@ -701,9 +705,10 @@ model:
 | `quantization.bnb_4bit_quant_type` | `"nf4"` | 양자화 방식 |
 | `quantization.bnb_4bit_use_double_quant` | `true` | Double quantization |
 | `data.max_length` | `4096` | 최대 시퀀스 길이 |
-| `training.output_dir` | `data/models/${model.name}/checkpoints/pre_stage` | 체크포인트 저장 경로 |
+| `training.output_dir` | `data/models/${model.name}/checkpoints/pre_stage/${training.run_name}` | 체크포인트 저장 경로 |
+| `training.run_name` | `"floorplan-pre-stage"` | W&B run 이름 + 체크포인트 저장 서브디렉토리명 |
 | `training.learning_rate` | `5e-4` | 학습률 (공격적 설정) |
-| `training.num_train_epochs` | `2` | 훈련 에폭 수 |
+| `training.num_train_epochs` | `5` | 훈련 에폭 수 |
 | `training.per_device_train_batch_size` | `2` | GPU당 배치 크기 |
 | `training.gradient_accumulation_steps` | `1` | 그래디언트 누적 steps |
 | `training.bf16` | `true` | 혼합 정밀도 (AMP) |
