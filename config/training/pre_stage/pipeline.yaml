@@ -37,7 +37,6 @@ resume:
   auto_find_latest: true
 
 training:
-  output_dir: "data/models/${model.name}/checkpoints/pre_stage"
   num_train_epochs: 5
   per_device_train_batch_size: 2
   per_device_eval_batch_size: 4
@@ -64,3 +63,4 @@ training:
   load_best_model_at_end: true
   # 디버그용: 0이면 전체 학습
   max_steps: 0
+  output_dir: "data/models/${model.name}/checkpoints/${training.run_name}/pre_stage"
