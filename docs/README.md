@@ -758,7 +758,7 @@ model:
 ### `config/training/augmentation/pre_stage.yaml` / `sft.yaml`
 
 훈련 단계별로 독립된 증강 프리셋을 관리한다. Hydra **config group** 방식으로 각 파이프라인 yaml에서 합성되어 `cfg.augmentation`으로 접근된다.
-현재 `pre_stage.yaml`과 `sft.yaml`이 동일한 증강 파라미터를 사용하며, 추후 DPO, GRPO 등 각 단계별로 독립 관리한다.
+현재 `pre_stage.yaml`과 `sft.yaml`이 동일한 증강 파라미터를 사용하며, 추후 GRPO 등 각 단계별로 독립 관리한다.
 
 | 파라미터 | 기본값 | 설명 |
 |---------|--------|------|
@@ -923,8 +923,8 @@ You are a floor plan generator. Given room conditions, generate complete floorpl
 | Step 4 | 데이터 증강 + 토크나이징 | ✅ 완료 |
 | Pre-Stage | 새 토큰 Embedding 워밍업 훈련 | ✅ 완료 |
 | SFT | LoRA Fine-tuning (attention/MLP 전 레이어) | ✅ 완료 |
-| Stage 2 | DPO Fine-tuning | 🔜 구현 예정 |
-| Stage 3 | GRPO (GDPO) 강화학습 + vllm colocate | ✅ 완료 |
+| ~~Stage 2~~ | ~~DPO Fine-tuning~~ | ❌ 미진행 (계획 취소) |
+| Stage 2 | GRPO (GDPO) 강화학습 + vllm colocate | ✅ 완료 |
 | Step 6 | 추론 + 시각화 (adapters/merged 모드, 4개 입력 소스) | ✅ 완료 |
 
 자세한 설계 내용은 [Docs.md](Docs.md)를 참고.

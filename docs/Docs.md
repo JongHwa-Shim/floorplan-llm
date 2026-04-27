@@ -44,7 +44,7 @@
    평면도 PNG → 정보 추출 → JSONL → Vocab 빌드 → Arrow 변환 → 증강 파이프라인
 
 ② LLM 훈련
-   Pretrained LLM + 커스텀 토큰 → Pre-Stage → 3-Stage Fine-tune (SFT → DPO → GRPO) → 평면도 생성 모델
+   Pretrained LLM + 커스텀 토큰 → Pre-Stage → 2-Stage Fine-tune (SFT → GRPO) → 평면도 생성 모델
 
 ③ 추론 + 시각화
    조건 입력 → 모델 추론 → 토큰 시퀀스 → 좌표 복원 → 평면도 시각화
@@ -282,7 +282,7 @@ Chat template으로 구성된 전체 시퀀스에서 **system + user 턴(입력)
 └──────────────────────────┬───────────────────────────┘
                            ▼
 ┌──────────────────────────────────────────────────────┐
-│  Step 5: LLM Fine-tuning: SFT → DPO → GRPO(GDPO)      │
+│  Step 5: LLM Fine-tuning: SFT → GRPO(GDPO)             │
 │  condition + output 토큰 → 평면도 생성 모델            │
 └──────────────────────────┬───────────────────────────┘
                            ▼
@@ -301,7 +301,6 @@ Chat template으로 구성된 전체 시퀀스에서 **system + user 턴(입력)
 | Pre-Stage | 새 토큰 Embedding 워밍업 | 토큰 시퀀스 배치 | 워밍업된 embed_tokens + lm_head |
 | SFT | LoRA Fine-tuning | HF Hub base model + `partial_state.pt` + 토큰 시퀀스 배치 | LoRA adapter Fine-tuned 모델 |
 | GRPO | GDPO 강화학습 | HF Hub base + `partial_state.pt` + SFT adapter + 프롬프트 배치 | RL LoRA adapter |
-| DPO | Direct Preference Optimization (예정) | 선호/비선호 쌍 | Fine-tuned 모델 |
 | 6 | 추론 + 시각화 | 조건 입력 (JSONL/Arrow/txt) | 평면도 JSON + 토큰 텍스트 + 이미지 |
 
 ---
@@ -623,8 +622,7 @@ data/models/{model.name}/checkpoints/pre_stage/{run_name}/
 ```
 config/training/augmentation/
 ├── pre_stage.yaml    ← Pre-Stage용 (완료)
-├── sft.yaml          ← SFT용 (완료, pre_stage.yaml과 동일한 증강 전략)
-└── dpo.yaml          ← DPO용 (추후)
+└── sft.yaml          ← SFT용 (완료, pre_stage.yaml과 동일한 증강 전략)
 ```
 
 `config/training/pre_stage/pipeline.yaml`의 `defaults` 선언:
@@ -637,7 +635,7 @@ defaults:
 - config 루트(`config/`)가 탐색 기준이므로 `training/augmentation: pre_stage` →
   `config/training/augmentation/pre_stage.yaml` 탐색
 - `pre_stage.yaml` 내부는 `augmentation:` 래퍼 없이 내용만 작성 (group 이름이 키를 자동 생성)
-- SFT, DPO, GRPO 파이프라인도 동일한 패턴으로 증강 설정 재사용/오버라이드 가능
+- SFT, GRPO 파이프라인도 동일한 패턴으로 증강 설정 재사용/오버라이드 가능
 
 ### 데이터 구성 및 Chat Template
 
@@ -723,9 +721,9 @@ data/models/{model.name}/
 
 ## 11. Step 5: LLM 학습
 
-### 3-Stage Fine-tuning 전략
+### 2-Stage Fine-tuning 전략
 
-Pre-Stage에서 워밍업된 커스텀 토큰 가중치(`partial_state.pt`)를 HF Hub base model에 주입한 뒤 3단계 fine-tuning을 수행한다. LLM 학습 시 QLoRA(Quantized LoRA)를 사용한다. 혼합 정밀도(bf16 AMP)를 적용한다.
+Pre-Stage에서 워밍업된 커스텀 토큰 가중치(`partial_state.pt`)를 HF Hub base model에 주입한 뒤 2단계 fine-tuning을 수행한다. LLM 학습 시 QLoRA(Quantized LoRA)를 사용한다. 혼합 정밀도(bf16 AMP)를 적용한다.
 
 ### Stage 1: SFT (Supervised Fine-tuning) — 완료
 
@@ -858,13 +856,7 @@ uv run python scripts/training/run_sft.py
 
 ---
 
-### Stage 2: DPO (Direct Preference Optimization) — 구현 예정
-
-선호/비선호 쌍(preferred/rejected)을 활용하여 생성 품질을 개선한다. 기하학적 제약(방 겹침, 경계 초과 등)을 위반하는 출력을 rejected 샘플로 구성.
-
----
-
-### Stage 3: GRPO (GDPO) — 완료
+### Stage 2: GRPO (GDPO) — 완료
 
 #### 목적
 
