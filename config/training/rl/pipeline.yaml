@@ -70,7 +70,8 @@ training:
   project_name: "floorplan-llm"
   run_name: "floorplan-rl"
   seed: 42
-  save_total_limit: 3
+  # 체크포인트 최대 보존 수 (null = 제한 없이 전체 보존)
+  save_total_limit: null
   # optimizer: paged_adamw_32bit는 momentum/variance를 CPU RAM으로 페이징해 GPU OOM 방지
   optim: "paged_adamw_32bit"
   max_steps: 0                          # 0 = 전체 epoch 기반
