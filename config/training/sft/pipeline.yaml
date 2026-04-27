@@ -41,7 +41,9 @@ lora:
 
 data:
   arrow_dir: "data/dataset/processed_dataset/rplan/arrow"
-  max_length: 4096
+  # 전체 데이터 기준: 전체 시퀀스 p99=384, max=446 토큰 (프롬프트+출력 합산)
+  # truncation 안전망 — collator는 dynamic padding 사용이므로 패딩 길이에 영향 없음
+  max_length: 1024
   aug_pipeline_config: "config/training/augmentation/sft.yaml"
 
 distributed:

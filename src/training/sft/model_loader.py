@@ -9,11 +9,13 @@ Pre-Stage resume과 유사한 패턴:
   - partial_state.pt 적용: embed_tokens / lm_head의 새 토큰 행에 훈련된 가중치 덮어쓰기
   - PartialEmbedding/PartialLMHead 불필요: 가중치를 standard 레이어에 직접 주입 후 freeze
   - 훈련 파라미터: LoRA adapter (attention/MLP 전 레이어)만 학습
+
+Mod Record: load_base_model_with_partial_state()와 build_lora_config()를 공개 API로 추출.
+RL 단계에서도 동일한 base 모델 로딩과 LoRA 설정이 필요하므로 재사용 가능하도록 분리.
 """
 
 import logging
 from pathlib import Path
-from typing import List
 
 import torch
 from omegaconf import DictConfig
@@ -27,42 +29,45 @@ logger = logging.getLogger(__name__)
 # 공개 API
 # ---------------------------------------------------------------------------
 
-def load_model_and_tokenizer(
+def load_base_model_with_partial_state(
     cfg: DictConfig,
+    partial_state_path: Path | str,
 ) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
-    """HF Hub base model을 로드하고 partial_state.pt 적용 후 LoRA를 붙인다.
+    """HF Hub NF4 base model을 로드하고 partial_state.pt를 주입한다.
 
-    Pre-Stage resume과 동일한 패턴으로:
-      1. HF Hub에서 base model 로드 (cfg.model.hub_id)
-      2. resize_token_embeddings()로 vocab 확장
-      3. partial_state.pt의 커스텀 토큰 가중치를 embed_tokens/lm_head에 직접 주입
-      4. prepare_model_for_kbit_training + get_peft_model (base params는 PEFT가 자동 freeze)
+    SFT와 RL에서 공통으로 호출하는 base 모델 로딩 단계.
+    커스텀 토큰 가중치를 embed_tokens/lm_head에 직접 주입하고 kbit 훈련을 준비한다.
+
+    처리 순서:
+        1. tokenizer_dir에서 토크나이저 로드
+        2. HF Hub에서 NF4 base model 로드
+        3. resize_token_embeddings (커스텀 토큰 수용)
+        4. partial_state.pt로 embed_tokens/lm_head 커스텀 토큰 행 주입
+        5. prepare_model_for_kbit_training (gradient checkpointing 활성화)
 
     Args:
-        cfg: Hydra DictConfig. cfg.model, cfg.quantization, cfg.lora 섹션을 참조한다.
+        cfg: Hydra DictConfig. cfg.model.hub_id, cfg.model.tokenizer_dir,
+             cfg.quantization 섹션을 참조한다.
+        partial_state_path: partial_state.pt 파일 경로.
 
     Returns:
         tuple:
-            - model: LoRA adapter가 적용된 PeftModelForCausalLM
+            - model: kbit 훈련 준비된 AutoModelForCausalLM
             - tokenizer: 커스텀 토큰이 포함된 AutoTokenizer
 
     Raises:
-        FileNotFoundError: model_dir 또는 tokenizer_dir 또는 partial_state.pt가 없을 경우.
+        FileNotFoundError: tokenizer_dir 또는 partial_state_path가 없을 경우.
     """
-    model_dir = Path(cfg.model.model_dir)
     tokenizer_dir = Path(cfg.model.tokenizer_dir)
+    partial_state_path = Path(partial_state_path)
     hub_id: str = cfg.model.hub_id
 
-    if not model_dir.exists():
-        raise FileNotFoundError(f"pre_stage/final 디렉토리를 찾을 수 없음: {model_dir}")
     if not tokenizer_dir.exists():
         raise FileNotFoundError(f"토크나이저 디렉토리를 찾을 수 없음: {tokenizer_dir}")
-
-    partial_state_path = model_dir / "partial_state.pt"
     if not partial_state_path.exists():
         raise FileNotFoundError(f"partial_state.pt를 찾을 수 없음: {partial_state_path}")
 
-    # 토크나이저 로드 (pre_stage/final에 커스텀 토큰 포함된 tokenizer.json)
+    # 토크나이저 로드 (tokenization/ 경로에 커스텀 토큰 포함)
     tokenizer = AutoTokenizer.from_pretrained(str(tokenizer_dir))
     logger.info(f"토크나이저 로드 완료. vocab size: {len(tokenizer)}")
 
@@ -85,15 +90,19 @@ def load_model_and_tokenizer(
     # partial_state.pt 로드하여 커스텀 토큰 행에 Pre-Stage 훈련된 가중치 주입
     # embed_tokens / lm_head는 4bit 양자화 대상이 아니므로 (bf16) 직접 인덱싱 가능
     logger.info(f"partial_state.pt 로드 및 커스텀 토큰 가중치 적용 중: {partial_state_path}")
-    partial_state = torch.load(partial_state_path, map_location="cpu", weights_only=True)
+    partial_state = torch.load(str(partial_state_path), map_location="cpu", weights_only=True)
     new_token_ids: list[int] = partial_state["new_token_ids"]
 
+    # Mod Record: partial_state.pt는 float32로 저장되지만 NF4 모델의 embed_tokens/lm_head는
+    # resize 후 bfloat16이므로, dtype을 대상 텐서에 맞춰 변환해야 index put이 정상 동작한다.
     with torch.no_grad():
         model.model.embed_tokens.weight.data[new_token_ids] = partial_state["new_embed"].to(
-            model.model.embed_tokens.weight.device
+            dtype=model.model.embed_tokens.weight.dtype,
+            device=model.model.embed_tokens.weight.device,
         )
         model.lm_head.weight.data[new_token_ids] = partial_state["new_lm_head"].to(
-            model.lm_head.weight.device
+            dtype=model.lm_head.weight.dtype,
+            device=model.lm_head.weight.device,
         )
     logger.info(f"커스텀 토큰 가중치 적용 완료 ({len(new_token_ids)}개 행)")
 
@@ -107,14 +116,69 @@ def load_model_and_tokenizer(
         gradient_checkpointing_kwargs={"use_reentrant": False},
     )
 
+    return model, tokenizer
+
+
+def load_model_and_tokenizer(
+    cfg: DictConfig,
+) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
+    """HF Hub base model을 로드하고 partial_state.pt 적용 후 LoRA를 붙인다.
+
+    Pre-Stage resume과 동일한 패턴으로:
+      1. load_base_model_with_partial_state()로 base model + partial_state 주입
+      2. build_lora_config() + get_peft_model()로 LoRA adapter 부착
+
+    Args:
+        cfg: Hydra DictConfig. cfg.model, cfg.quantization, cfg.lora 섹션을 참조한다.
+
+    Returns:
+        tuple:
+            - model: LoRA adapter가 적용된 PeftModelForCausalLM
+            - tokenizer: 커스텀 토큰이 포함된 AutoTokenizer
+
+    Raises:
+        FileNotFoundError: model_dir 또는 tokenizer_dir 또는 partial_state.pt가 없을 경우.
+    """
+    model_dir = Path(cfg.model.model_dir)
+
+    if not model_dir.exists():
+        raise FileNotFoundError(f"pre_stage/final 디렉토리를 찾을 수 없음: {model_dir}")
+
+    partial_state_path = model_dir / "partial_state.pt"
+
+    # 공통 base model 로딩 (RL과 공유)
+    model, tokenizer = load_base_model_with_partial_state(cfg, partial_state_path)
+
     # LoRA adapter 적용 (get_peft_model이 embed_tokens / lm_head 포함 base params 전체 freeze)
-    lora_config = _build_lora_config(cfg.lora)
+    lora_config = build_lora_config(cfg.lora)
     model = get_peft_model(model, lora_config)
 
     # 훈련 가능 파라미터 수 출력
     model.print_trainable_parameters()
 
     return model, tokenizer
+
+
+def build_lora_config(lora_cfg: DictConfig) -> LoraConfig:
+    """LoRA LoraConfig를 생성한다.
+
+    SFT와 RL에서 공통으로 사용하는 표준 LoRA 설정.
+
+    Args:
+        lora_cfg: lora 설정 DictConfig (r, lora_alpha, lora_dropout, target_modules, bias).
+
+    Returns:
+        LoraConfig 인스턴스.
+    """
+    return LoraConfig(
+        r=lora_cfg.r,
+        lora_alpha=lora_cfg.lora_alpha,
+        lora_dropout=lora_cfg.lora_dropout,
+        target_modules=list(lora_cfg.target_modules),
+        bias=lora_cfg.bias,
+        task_type=TaskType.CAUSAL_LM,
+        use_dora=False,
+    )
 
 
 def merge_lora_and_save(
@@ -194,24 +258,4 @@ def _build_bnb_config(quant_cfg: DictConfig) -> BitsAndBytesConfig:
         bnb_4bit_compute_dtype=compute_dtype,
         bnb_4bit_quant_type=quant_cfg.bnb_4bit_quant_type,
         bnb_4bit_use_double_quant=quant_cfg.bnb_4bit_use_double_quant,
-    )
-
-
-def _build_lora_config(lora_cfg: DictConfig) -> LoraConfig:
-    """LoRA LoraConfig를 생성한다.
-
-    Args:
-        lora_cfg: lora 설정 DictConfig (r, lora_alpha, lora_dropout, target_modules, bias).
-
-    Returns:
-        LoraConfig 인스턴스.
-    """
-    return LoraConfig(
-        r=lora_cfg.r,
-        lora_alpha=lora_cfg.lora_alpha,
-        lora_dropout=lora_cfg.lora_dropout,
-        target_modules=list(lora_cfg.target_modules),
-        bias=lora_cfg.bias,
-        task_type=TaskType.CAUSAL_LM,
-        use_dora=False,
     )

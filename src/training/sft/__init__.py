@@ -4,12 +4,19 @@ Pre-Stage에서 워밍업된 로컬 모델에 LoRA를 적용하여 전체 레이
 데이터셋 및 DataCollator는 Pre-Stage와 동일한 포맷이므로 PreStageDataset을 재활용한다.
 """
 
-from src.training.sft.model_loader import load_model_and_tokenizer, merge_lora_and_save
+from src.training.sft.model_loader import (
+    load_model_and_tokenizer,
+    load_base_model_with_partial_state,
+    build_lora_config,
+    merge_lora_and_save,
+)
 from src.training.sft.trainer import build_trainer
 from src.training.pre_stage.dataset import PreStageDataset as SFTDataset
 
 __all__ = [
     "load_model_and_tokenizer",
+    "load_base_model_with_partial_state",
+    "build_lora_config",
     "merge_lora_and_save",
     "build_trainer",
     "SFTDataset",
