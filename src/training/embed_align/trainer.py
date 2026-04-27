@@ -1,6 +1,6 @@
-"""Pre-Stage 훈련 설정 및 Trainer 빌드 모듈.
+"""Embedding Alignment 훈련 설정 및 Trainer 빌드 모듈.
 
-transformers.Trainer를 기반으로 Pre-Stage 훈련을 구성한다.
+transformers.Trainer를 기반으로 Embedding Alignment 훈련을 구성한다.
 PEFT 어댑터(LoRA/DoRA)는 사용하지 않고, PartialEmbedding / PartialLMHead 모듈로
 새 토큰 행만 nn.Parameter로 분리하여 optimizer state를 최소화한다.
 """
@@ -15,8 +15,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingA
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 from torch.utils.data import Dataset
 
-from src.training.pre_stage.collator import PreStageCollator
-from src.training.pre_stage.model_loader import (
+from src.training.embed_align.collator import EmbedAlignCollator
+from src.training.embed_align.model_loader import (
     PartialEmbedding,
     PartialLMHead,
 )
@@ -24,8 +24,8 @@ from src.training.pre_stage.model_loader import (
 logger = logging.getLogger(__name__)
 
 
-class PreStageTrainer(Trainer):
-    """Pre-Stage 전용 Trainer.
+class EmbedAlignTrainer(Trainer):
+    """Embedding Alignment 전용 Trainer.
 
     embed_tokens와 lm_head는 4bit 양자화 대상에서 자동 제외되어 bf16으로 유지되므로
     gradient 기반 학습이 가능하다. 그러나 transformers.Trainer는 PEFT 어댑터 없는
@@ -42,7 +42,7 @@ class PreStageTrainer(Trainer):
     """
 
     def __init__(self, *args, new_token_ids: list[int], **kwargs):
-        """PreStageTrainer 초기화.
+        """EmbedAlignTrainer 초기화.
 
         Args:
             *args: Trainer에 전달될 위치 인자.
@@ -53,7 +53,7 @@ class PreStageTrainer(Trainer):
 
         # Mod Record: Trainer.__init__가 validate_quantization_for_training()을 호출해
         # "adapter 없는 quantized model은 학습 불가" 에러를 발생시킨다.
-        # Pre-Stage에서 embed_tokens/lm_head는 비양자화(bf16) 레이어이므로
+        # Embedding Alignment에서 embed_tokens/lm_head는 비양자화(bf16) 레이어이므로
         # adapter 없이도 훈련 가능하다. 검증 함수를 일시 비활성화하여 우회한다.
         # Mod Record: trainer.py가 validate_quantization_for_training을 from-import로
         # 가져오므로 trainer_utils를 패치해도 무효하다. trainer 모듈 네임스페이스를 직접 패치한다.
@@ -81,7 +81,7 @@ class PreStageTrainer(Trainer):
         체크포인트 저장 이후의 훈련이 완전히 무효가 되는 버그가 있었다.
         수정: merge_and_restore/_setup_partial_training을 중간 체크포인트에서 제거.
         model.safetensors는 저장하지 않고 partial_state.pt만으로 resume을 지원한다.
-        merge_and_restore는 최종 저장(run_pre_stage.py)에서만 호출한다.
+        merge_and_restore는 최종 저장(run_embed_align.py)에서만 호출한다.
 
         Args:
             model: 현재 훈련 중인 모델 (PartialEmbedding/PartialLMHead 적용 상태).
@@ -267,25 +267,25 @@ def build_trainer(
     eval_dataset: Dataset,
     cfg: DictConfig,
     new_token_ids: list[int],
-) -> PreStageTrainer:
-    """Pre-Stage Trainer를 생성한다.
+) -> EmbedAlignTrainer:
+    """Embedding Alignment Trainer를 생성한다.
 
     Args:
         model: PartialEmbedding / PartialLMHead가 적용된 AutoModelForCausalLM.
         tokenizer: 커스텀 토큰이 포함된 AutoTokenizer.
-        train_dataset: 훈련용 PreStageDataset.
-        eval_dataset: 검증용 PreStageDataset.
+        train_dataset: 훈련용 EmbedAlignDataset.
+        eval_dataset: 검증용 EmbedAlignDataset.
         cfg: Hydra DictConfig. cfg.training, cfg.data 섹션 참조.
         new_token_ids: 새 커스텀 토큰 ID 리스트.
             체크포인트 저장 후 PartialEmbedding 재적용에 사용.
 
     Returns:
-        설정된 PreStageTrainer 인스턴스.
+        설정된 EmbedAlignTrainer 인스턴스.
     """
     training_args = build_training_arguments(cfg)
-    collator = PreStageCollator(tokenizer=tokenizer, max_length=cfg.data.max_length)
+    collator = EmbedAlignCollator(tokenizer=tokenizer, max_length=cfg.data.max_length)
 
-    trainer = PreStageTrainer(
+    trainer = EmbedAlignTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,

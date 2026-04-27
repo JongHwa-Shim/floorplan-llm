@@ -1,4 +1,4 @@
-"""Pre-Stage 체크포인트 저장/로드 정상 동작 검증 스크립트.
+"""Embedding Alignment 체크포인트 저장/로드 정상 동작 검증 스크립트.
 
 두 시나리오를 검증한다:
   Case 1. 연속 훈련: checkpoint 저장 이후에도 new_embed/new_lm_head가 계속 업데이트되는지
@@ -10,7 +10,7 @@
   이후 optimizer.step()이 소멸된 객체를 업데이트하려 해도 grad=None → no-op.
   결과: checkpoint 저장 이후의 훈련 전체가 무효.
 
-검증 흐름 (run_pre_stage.py와 동일한 모델/데이터/Trainer 구성 사용):
+검증 흐름 (run_embed_align.py와 동일한 모델/데이터/Trainer 구성 사용):
   Case 1:
     1. {STEPS_PHASE1} steps 훈련 → new_embed 스냅샷 기록
     2. _save_checkpoint 수동 호출 (콜백)
@@ -25,7 +25,7 @@
       b. Phase2 훈련 후 new_embed != partial_state.pt 값 (resume 후에도 업데이트됨)
 
 사용법:
-    uv run python tests/training/pre_stage/validate_save_and_load.py
+    uv run python tests/training/embed_align/validate_save_and_load.py
 """
 
 import logging
@@ -43,12 +43,12 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from src.training.pre_stage import (
-    PreStageDataset,
+from src.training.embed_align import (
+    EmbedAlignDataset,
     build_trainer,
     load_model_and_tokenizer,
 )
-from src.training.pre_stage.model_loader import PartialEmbedding, PartialLMHead
+from src.training.embed_align.model_loader import PartialEmbedding, PartialLMHead
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ def _snap_embed(model) -> torch.Tensor:
 def load_cfg(output_dir: str, max_steps: int) -> DictConfig:
     """테스트용 DictConfig를 구성한다.
 
-    run_pre_stage.py와 동일한 방식으로 pipeline.yaml과 augmentation config를 로드하고,
+    run_embed_align.py와 동일한 방식으로 pipeline.yaml과 augmentation config를 로드하고,
     테스트에 맞게 훈련 파라미터를 오버라이드한다.
 
     Args:
@@ -90,11 +90,11 @@ def load_cfg(output_dir: str, max_steps: int) -> DictConfig:
     Returns:
         테스트용 DictConfig.
     """
-    config_path = Path(_PROJECT_ROOT) / "config" / "training" / "pre_stage" / "pipeline.yaml"
+    config_path = Path(_PROJECT_ROOT) / "config" / "training" / "embed_align" / "pipeline.yaml"
     cfg = OmegaConf.load(config_path)
     OmegaConf.set_struct(cfg, False)
 
-    # 증강 config 로드 (run_pre_stage.py와 동일한 방식)
+    # 증강 config 로드 (run_embed_align.py와 동일한 방식)
     aug_config_path = Path(_PROJECT_ROOT) / cfg.data.aug_pipeline_config
     aug_cfg = OmegaConf.load(aug_config_path)
     OmegaConf.update(cfg, "augmentation", aug_cfg, merge=True)
@@ -178,8 +178,8 @@ def case1_continuous_training(output_dir: str) -> bool:
     set_seed(42)
 
     model, tokenizer, new_token_ids = load_model_and_tokenizer(cfg)
-    train_dataset = PreStageDataset(cfg, tokenizer, split="train", seed=42)
-    eval_dataset = PreStageDataset(cfg, tokenizer, split="validation", seed=42)
+    train_dataset = EmbedAlignDataset(cfg, tokenizer, split="train", seed=42)
+    eval_dataset = EmbedAlignDataset(cfg, tokenizer, split="validation", seed=42)
 
     tracker = EmbedTracker()
     save_cb = SaveAtStepCallback(save_at_step=STEPS_PHASE1)
@@ -244,8 +244,8 @@ def case2_resume(output_dir: str) -> bool:
     set_seed(42)
 
     model1, tokenizer1, new_token_ids1 = load_model_and_tokenizer(cfg1)
-    train_dataset1 = PreStageDataset(cfg1, tokenizer1, split="train", seed=42)
-    eval_dataset1 = PreStageDataset(cfg1, tokenizer1, split="validation", seed=42)
+    train_dataset1 = EmbedAlignDataset(cfg1, tokenizer1, split="train", seed=42)
+    eval_dataset1 = EmbedAlignDataset(cfg1, tokenizer1, split="validation", seed=42)
 
     tracker1 = EmbedTracker()
     save_cb1 = SaveAtStepCallback(save_at_step=STEPS_PHASE1)
@@ -290,8 +290,8 @@ def case2_resume(output_dir: str) -> bool:
     set_seed(42)
 
     model2, tokenizer2, new_token_ids2 = load_model_and_tokenizer(cfg2)
-    train_dataset2 = PreStageDataset(cfg2, tokenizer2, split="train", seed=42)
-    eval_dataset2 = PreStageDataset(cfg2, tokenizer2, split="validation", seed=42)
+    train_dataset2 = EmbedAlignDataset(cfg2, tokenizer2, split="train", seed=42)
+    eval_dataset2 = EmbedAlignDataset(cfg2, tokenizer2, split="validation", seed=42)
 
     tracker2 = EmbedTracker()
 

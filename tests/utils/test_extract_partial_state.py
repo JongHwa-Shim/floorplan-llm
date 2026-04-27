@@ -208,7 +208,7 @@ def run_phase2_integration_test() -> None:
     print("=== Phase 2: 실제 파일 통합 테스트 ===")
 
     model_name = "Qwen2.5-Coder-7B"
-    ckpt_dir = PROJECT_ROOT / "data" / "models" / model_name / "checkpoints" / "pre_stage" / "final"
+    ckpt_dir = PROJECT_ROOT / "data" / "models" / model_name / "checkpoints" / "embed_align" / "final"
     vocab_ext_path = PROJECT_ROOT / "data" / "models" / model_name / "tokenization" / "vocab_extension.json"
     safetensors_path = ckpt_dir / "model.safetensors"
     existing_partial_path = ckpt_dir / "partial_state.pt"

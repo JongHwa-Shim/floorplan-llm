@@ -1,7 +1,7 @@
 """SFT 훈련 설정 및 Trainer 빌드 모듈.
 
 표준 transformers.Trainer를 기반으로 SFT 훈련을 구성한다.
-PEFT DoRA adapter가 정식 지원되므로 Pre-Stage와 달리 Trainer 패치가 필요 없다.
+PEFT DoRA adapter가 정식 지원되므로 Embedding Alignment와 달리 Trainer 패치가 필요 없다.
 """
 
 import logging
@@ -12,7 +12,7 @@ from peft import PeftModel
 from transformers import AutoTokenizer, Trainer, TrainingArguments
 from torch.utils.data import Dataset
 
-from src.training.pre_stage.collator import PreStageCollator
+from src.training.embed_align.collator import EmbedAlignCollator
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +83,8 @@ def build_trainer(
     """SFT Trainer를 생성한다.
 
     PEFT DoRA adapter는 transformers.Trainer에서 정식 지원되므로
-    Pre-Stage의 PreStageTrainer와 달리 표준 Trainer를 사용한다.
-    DataCollator는 데이터 포맷이 동일한 PreStageCollator를 재활용한다.
+    Embedding Alignment의 EmbedAlignTrainer와 달리 표준 Trainer를 사용한다.
+    DataCollator는 데이터 포맷이 동일한 EmbedAlignCollator를 재활용한다.
 
     Args:
         model: DoRA adapter가 적용된 PeftModelForCausalLM.
@@ -97,7 +97,7 @@ def build_trainer(
         설정된 Trainer 인스턴스.
     """
     training_args = build_training_arguments(cfg)
-    collator = PreStageCollator(tokenizer=tokenizer, max_length=cfg.data.max_length)
+    collator = EmbedAlignCollator(tokenizer=tokenizer, max_length=cfg.data.max_length)
 
     trainer = Trainer(
         model=model,

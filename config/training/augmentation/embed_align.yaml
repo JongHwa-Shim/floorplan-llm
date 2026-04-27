@@ -1,4 +1,4 @@
-# Pre-Stage 훈련용 rplan 데이터 증강 설정
+# Embedding Alignment 훈련용 rplan 데이터 증강 설정
 # group: training/augmentation → cfg.augmentation 으로 병합됨
 # 파일 내부에 augmentation: 래퍼 없이 내용만 작성해야 이중 중첩을 피할 수 있음
 

@@ -12,7 +12,7 @@ import torch
 from omegaconf import DictConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from src.training.pre_stage.dataset import SYSTEM_PROMPT
+from src.training.embed_align.dataset import SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 

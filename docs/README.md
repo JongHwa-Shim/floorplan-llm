@@ -37,15 +37,15 @@ floorplan-llm/
 │   │       └── pipeline.yaml
 │   ├── training/
 │   │   ├── augmentation/           # 데이터 증강 프리셋 (Hydra config group)
-│   │   │   ├── pre_stage.yaml      # Pre-Stage용 증강 설정 → cfg.augmentation으로 병합
+│   │   │   ├── embed_align.yaml      # Embedding Alignment용 증강 설정 → cfg.augmentation으로 병합
 │   │   │   ├── sft.yaml            # SFT용 증강 설정 → cfg.augmentation으로 병합
 │   │   │   └── validate_augmentation/  # validate_augmentation.py 실행 설정
 │   │   │       ├── pipeline.yaml       # 스크립트 전반 설정 (model, data, validate)
 │   │   │       └── augmentation.yaml   # 검증에 사용할 증강 파라미터
-│   │   ├── pre_stage/              # Pre-Stage 훈련 설정
-│   │   │   └── pipeline.yaml       # defaults로 training/augmentation: pre_stage 합성
+│   │   ├── embed_align/              # Embedding Alignment 훈련 설정
+│   │   │   └── pipeline.yaml       # defaults로 training/augmentation: embed_align 합성
 │   │   ├── sft/                    # SFT 훈련 설정
-│   │   │   └── pipeline.yaml       # LoRA, 학습률, hub_id/model_dir (final_checkpoints/pre_stage) 등
+│   │   │   └── pipeline.yaml       # LoRA, 학습률, hub_id/model_dir (final_checkpoints/embed_align) 등
 │   │   └── rl/                     # RL(GRPO) 훈련 설정
 │   │       └── pipeline.yaml       # GDPO, 보상함수, vLLM colocate, DDP 설정
 │   └── inference/                  # 추론 설정
@@ -78,7 +78,7 @@ floorplan-llm/
 │   │   │   ├── strategies.py       # 15+ 증강 전략 구현
 │   │   │   ├── tokenizer.py        # 조건/정답 토큰 시퀀스 생성
 │   │   │   └── decoder.py          # 토큰 → 텍스트 디코딩
-│   │   ├── pre_stage/              # Pre-Stage 훈련 모듈
+│   │   ├── embed_align/              # Embedding Alignment 훈련 모듈
 │   │   │   ├── model_loader.py     # 4bit 양자화 로드 + PartialEmbedding/PartialLMHead
 │   │   │   ├── dataset.py          # Arrow 로드 + 증강 + Chat Template
 │   │   │   ├── collator.py         # Dynamic padding + label 마스킹
@@ -122,7 +122,7 @@ floorplan-llm/
 │   ├── training/
 │   │   ├── augmentation/
 │   │   │   └── validate_augmentation.py # 증강 결과 검증
-│   │   ├── run_pre_stage.py        # Pre-Stage 훈련 실행
+│   │   ├── run_embed_align.py        # Embedding Alignment 훈련 실행
 │   │   ├── run_sft.py              # SFT 훈련 실행 (HF Hub + partial_state.pt + LoRA adapter 저장)
 │   │   └── run_rl.py               # RL(GRPO) 훈련 실행 (vLLM colocate + DDP 자동 전환)
 │   ├── inference/
@@ -136,7 +136,7 @@ floorplan-llm/
 │   │       ├── validate_jsonl.py   # JSONL 스키마 무결성 검증
 │   │       └── visualize_jsonl.py  # 평면도 JSONL 시각화
 │   ├── training/
-│   │   ├── pre_stage/
+│   │   ├── embed_align/
 │   │   │   ├── validate_resume.py          # Resume 체크포인트 복원 검증
 │   │   │   └── validate_save_and_load.py   # 저장/로드 후 optimizer 업데이트 정상 동작 검증
 │   │   ├── sft/
@@ -160,11 +160,11 @@ floorplan-llm/
 │       └── {model.name}/                       # 모델명별 독립 저장 (예: Qwen2.5-Coder-7B)
 │           ├── tokenization/                   # 확장된 토크나이저 + vocab
 │           ├── final_checkpoints/              # 수동 관리 최종 버전 (훈련 run final과 분리)
-│           │   └── pre_stage/                  # Pre-Stage 완료 후 수동 복사 (SFT 입력)
+│           │   └── embed_align/                  # Embedding Alignment 완료 후 수동 복사 (SFT 입력)
 │           ├── merged_checkpoints/             # merge_lora 유틸로 생성한 standalone full model (merged 로드 모드용)
 │           └── checkpoints/
-│               ├── pre_stage/                  # Pre-Stage 훈련 run 체크포인트
-│               │   └── {run_name}/             # run_name별 독립 저장 (기본: floorplan-pre-stage)
+│               ├── embed_align/                  # Embedding Alignment 훈련 run 체크포인트
+│               │   └── {run_name}/             # run_name별 독립 저장 (기본: floorplan-embed-align)
 │               │       ├── checkpoint-*/       # 에폭별 자동 저장 체크포인트
 │               │       └── final/              # 훈련 run 최종 체크포인트 (partial_state.pt)
 │               ├── sft/                        # SFT 훈련 run 체크포인트
@@ -178,7 +178,7 @@ floorplan-llm/
 │
 ├── outputs/                        # Hydra 실행 로그 + 추론 결과
 │   ├── training/
-│   │   ├── pre_stage/              # Pre-Stage 실행 로그
+│   │   ├── embed_align/              # Embedding Alignment 실행 로그
 │   │   │   └── YYYY-MM-DD/HH-MM-SS/
 │   │   └── sft/                    # SFT 실행 로그
 │   │       └── YYYY-MM-DD/HH-MM-SS/
@@ -265,7 +265,7 @@ PNG (RPLAN 데이터셋)
 [Step 4] augmentation        → (condition_tokens, output_tokens) 쌍
         │
         ▼
-[Pre-Stage] 새 토큰 Embedding 워밍업 → 커스텀 토큰 embedding 안착
+[Embedding Alignment] 새 토큰 Embedding 워밍업 → 커스텀 토큰 embedding 안착
         │
         ▼
 [SFT] LoRA Fine-tuning         → attention/MLP 전 레이어 학습
@@ -277,7 +277,7 @@ PNG (RPLAN 데이터셋)
 [Step 6] 추론 + 시각화 → 평면도 이미지
 ```
 
-> **현재 구현 완료 범위:** Step 1 ~ Step 4, Pre-Stage, SFT, GRPO(GDPO), Step 6 (추론)
+> **현재 구현 완료 범위:** Step 1 ~ Step 4, Embedding Alignment, SFT, GRPO(GDPO), Step 6 (추론)
 
 ---
 
@@ -396,43 +396,43 @@ uv run python scripts/training/augmentation/validate_augmentation.py \
 
 ---
 
-### Pre-Stage: 새 토큰 Embedding 워밍업
+### Embedding Alignment: 새 토큰 Embedding 워밍업
 
 커스텀 토큰의 embedding과 lm_head 행만 훈련하여 기존 Pretrained 파라미터 공간에 안착시킨다.
 
 ```bash
 # 기본 실행
-uv run python scripts/training/run_pre_stage.py
+uv run python scripts/training/run_embed_align.py
 
 # 디버그 (10 step만 실행, W&B 비활성화)
-uv run python scripts/training/run_pre_stage.py \
+uv run python scripts/training/run_embed_align.py \
     training.max_steps=10 training.report_to=none
 
 # 하이퍼파라미터 오버라이드
-uv run python scripts/training/run_pre_stage.py \
+uv run python scripts/training/run_embed_align.py \
     training.learning_rate=1e-3 training.num_train_epochs=3
 
 # 다른 모델 사용
-uv run python scripts/training/run_pre_stage.py \
+uv run python scripts/training/run_embed_align.py \
     model.user=meta-llama model.name=Llama-3.1-8B
 
 # DDP 멀티 GPU: nproc_per_node를 config에서 설정하거나 override로 지정
-uv run python scripts/training/run_pre_stage.py \
+uv run python scripts/training/run_embed_align.py \
     distributed.nproc_per_node=2
 
 # 계속 훈련: 최신 체크포인트 자동 탐색 후 재개
-uv run python scripts/training/run_pre_stage.py \
+uv run python scripts/training/run_embed_align.py \
     resume.enabled=true
 
 # 계속 훈련: 특정 체크포인트 지정
-uv run python scripts/training/run_pre_stage.py \
+uv run python scripts/training/run_embed_align.py \
     resume.enabled=true \
-    resume.checkpoint_path=data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/floorplan-pre-stage/checkpoint-500
+    resume.checkpoint_path=data/models/Qwen2.5-Coder-7B/checkpoints/embed_align/floorplan-embed-align/checkpoint-500
 ```
 
 ### SFT: LoRA Fine-tuning
 
-HF Hub에서 base model을 로드하고 Pre-Stage에서 훈련된 커스텀 토큰 가중치(`final_checkpoints/pre_stage/partial_state.pt`)를 주입한 뒤 LoRA를 적용하여 attention/MLP 전 레이어를 fine-tuning한다.
+HF Hub에서 base model을 로드하고 Embedding Alignment에서 훈련된 커스텀 토큰 가중치(`final_checkpoints/embed_align/partial_state.pt`)를 주입한 뒤 LoRA를 적용하여 attention/MLP 전 레이어를 fine-tuning한다.
 
 ```bash
 # 기본 실행
@@ -497,9 +497,9 @@ data/models/{model.name}/checkpoints/sft/{run_name}/
 # 기본 실행 (JSONL 파일 30개, 증강 적용, do_sample=true)
 uv run python scripts/inference/run_inference.py
 
-# pre-stage base model (adapters 없이, adapter 목록 비워둠)
+# embed-align base model (adapters 없이, adapter 목록 비워둠)
 uv run python scripts/inference/run_inference.py \
-    model.training_stage=pre_stage
+    model.training_stage=embed_align
 
 # SFT adapter 적용
 uv run python scripts/inference/run_inference.py \
@@ -553,20 +553,20 @@ outputs/inference/{model.name}/{training_stage}/{YYYY-MM-DD}/{HH-MM-SS}/
 
 ### 유틸리티: merged model.safetensors → partial_state.pt 추출
 
-Pre-Stage 저장 방식 변경 전(구 `merge_and_restore` 방식)에 저장된 `model.safetensors`에서
+Embedding Alignment 저장 방식 변경 전(구 `merge_and_restore` 방식)에 저장된 `model.safetensors`에서
 커스텀 토큰 가중치만 분리하여 현재 코드와 호환되는 `partial_state.pt`를 생성한다.
 
 ```bash
 # 기본 실행 (출력: {checkpoint_dir}/partial_state_extracted.pt, 기존 파일 덮어쓰기 방지)
 uv run python scripts/utils/extract_partial_state.py \
-    --checkpoint_dir data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/final \
+    --checkpoint_dir data/models/Qwen2.5-Coder-7B/checkpoints/embed_align/final \
     --model_name Qwen2.5-Coder-7B
 
-# SFT 입력 경로(final_checkpoints/pre_stage)로 직접 추출 + bfloat16 변환
+# SFT 입력 경로(final_checkpoints/embed_align)로 직접 추출 + bfloat16 변환
 uv run python scripts/utils/extract_partial_state.py \
-    --checkpoint_dir data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/final \
+    --checkpoint_dir data/models/Qwen2.5-Coder-7B/checkpoints/embed_align/final \
     --model_name Qwen2.5-Coder-7B \
-    --output_path data/models/Qwen2.5-Coder-7B/final_checkpoints/pre_stage/partial_state.pt \
+    --output_path data/models/Qwen2.5-Coder-7B/final_checkpoints/embed_align/partial_state.pt \
     --dtype bfloat16
 
 # vocab_extension.json 경로 직접 지정
@@ -599,7 +599,7 @@ uv run python tests/training/sft/validate_sft.py
 
 # 특정 model_dir 지정
 uv run python tests/training/sft/validate_sft.py \
-    --model_dir data/models/Qwen2.5-Coder-7B/final_checkpoints/pre_stage
+    --model_dir data/models/Qwen2.5-Coder-7B/final_checkpoints/embed_align
 ```
 
 > 모든 Phase가 `[PASS]`가 출력되어야 정상.
@@ -670,22 +670,22 @@ uv run python tests/training/rl/validate_rl.py --use_vllm
 
 ---
 
-### Pre-Stage 검증: Resume 체크포인트 확인
+### Embedding Alignment 검증: Resume 체크포인트 확인
 
 체크포인트의 `partial_state.pt`가 올바르게 저장되어 있는지, Resume 시 new_embed/new_lm_head 복원이 가능한지 확인한다.
 
 ```bash
 # 최신 체크포인트 자동 탐색 검증
-uv run python tests/training/pre_stage/validate_resume.py
+uv run python tests/training/embed_align/validate_resume.py
 
 # 특정 체크포인트 지정 검증
-uv run python tests/training/pre_stage/validate_resume.py \
-    --checkpoint data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/floorplan-pre-stage/checkpoint-80304
+uv run python tests/training/embed_align/validate_resume.py \
+    --checkpoint data/models/Qwen2.5-Coder-7B/checkpoints/embed_align/floorplan-embed-align/checkpoint-80304
 ```
 
 ---
 
-### Pre-Stage 검증: 저장/로드 후 optimizer 업데이트 검증
+### Embedding Alignment 검증: 저장/로드 후 optimizer 업데이트 검증
 
 체크포인트 저장 후 optimizer의 Parameter 참조가 유지되어 훈련이 정상적으로 계속되는지 검증한다.
 
@@ -694,15 +694,15 @@ uv run python tests/training/pre_stage/validate_resume.py \
 - **Case 2 (Resume):** Phase 1 훈련 → 체크포인트 저장 → 새 모델 로드 → Resume → Phase 2 훈련이 정상적으로 이어지는지 확인
 
 ```bash
-uv run python tests/training/pre_stage/validate_save_and_load.py
+uv run python tests/training/embed_align/validate_save_and_load.py
 ```
 
 > 임시 출력 디렉토리 (`data/temp/validate_save_load`)가 자동 생성/삭제된다.
 > 두 케이스 모두 `PASS`가 출력되어야 정상.
 
-**Pre-Stage 체크포인트 출력 구조:**
+**Embedding Alignment 체크포인트 출력 구조:**
 ```
-data/models/{model.name}/checkpoints/pre_stage/{run_name}/
+data/models/{model.name}/checkpoints/embed_align/{run_name}/
 ├── checkpoint-{step}/          # 에폭별 자동 저장 (최대 save_total_limit개 보존)
 │   ├── partial_state.pt        # new_embed / new_lm_head 가중치 (model.safetensors 없음)
 │   ├── optimizer.pt            # AdamW state (~16MB)
@@ -755,10 +755,10 @@ model:
 | `validation.enabled` | `true` | 변환 후 검증 여부 |
 | `validation.num_samples` | `10` | 검증 샘플 수 |
 
-### `config/training/augmentation/pre_stage.yaml` / `sft.yaml`
+### `config/training/augmentation/embed_align.yaml` / `sft.yaml`
 
 훈련 단계별로 독립된 증강 프리셋을 관리한다. Hydra **config group** 방식으로 각 파이프라인 yaml에서 합성되어 `cfg.augmentation`으로 접근된다.
-현재 `pre_stage.yaml`과 `sft.yaml`이 동일한 증강 파라미터를 사용하며, 추후 GRPO 등 각 단계별로 독립 관리한다.
+현재 `embed_align.yaml`과 `sft.yaml`이 동일한 증강 파라미터를 사용하며, 추후 GRPO 등 각 단계별로 독립 관리한다.
 
 | 파라미터 | 기본값 | 설명 |
 |---------|--------|------|
@@ -800,7 +800,7 @@ model:
 |---------|--------|------|
 | `hydra.run.dir` | `outputs/training/sft/${now:%Y-%m-%d}/${now:%H-%M-%S}` | Hydra 로그·설정 스냅샷 저장 경로 |
 | `model.hub_id` | `${model.user}/${model.name}` | HF Hub에서 base model 로드에 사용 |
-| `model.model_dir` | `data/models/${model.name}/final_checkpoints/pre_stage` | partial_state.pt 위치 (수동 관리 최종 버전) |
+| `model.model_dir` | `data/models/${model.name}/final_checkpoints/embed_align` | partial_state.pt 위치 (수동 관리 최종 버전) |
 | `model.tokenizer_dir` | `data/models/${model.name}/tokenization` | 토크나이저 경로 (훈련 단계와 무관한 공통 경로) |
 | `lora.r` | `32` | LoRA rank (adapter 표현력) |
 | `lora.lora_alpha` | `64` | LoRA scaling factor (alpha/r=2, 실효 LR 스케일) |
@@ -814,7 +814,7 @@ model:
 | `training.max_steps` | `0` | 디버그용 step 제한 (0=비활성) |
 | `resume.enabled` | `false` | 계속 훈련 활성화 여부 |
 
-### `config/training/pre_stage/pipeline.yaml`
+### `config/training/embed_align/pipeline.yaml`
 
 | 파라미터 | 기본값 | 설명 |
 |---------|--------|------|
@@ -824,8 +824,8 @@ model:
 | `quantization.bnb_4bit_quant_type` | `"nf4"` | 양자화 방식 |
 | `quantization.bnb_4bit_use_double_quant` | `true` | Double quantization |
 | `data.max_length` | `4096` | 최대 시퀀스 길이 |
-| `training.output_dir` | `data/models/${model.name}/checkpoints/pre_stage/${training.run_name}` | 체크포인트 저장 경로 |
-| `training.run_name` | `"floorplan-pre-stage"` | W&B run 이름 + 체크포인트 저장 서브디렉토리명 |
+| `training.output_dir` | `data/models/${model.name}/checkpoints/embed_align/${training.run_name}` | 체크포인트 저장 경로 |
+| `training.run_name` | `"floorplan-embed-align"` | W&B run 이름 + 체크포인트 저장 서브디렉토리명 |
 | `training.learning_rate` | `5e-4` | 학습률 (공격적 설정) |
 | `training.num_train_epochs` | `5` | 훈련 에폭 수 |
 | `training.per_device_train_batch_size` | `2` | GPU당 배치 크기 |
@@ -844,7 +844,7 @@ model:
 |---------|--------|------|
 | `hydra.run.dir` | `outputs/inference/${model.name}/${model.training_stage}/${now:%Y-%m-%d}/${now:%H-%M-%S}` | Hydra 로그·설정 스냅샷 + 추론 결과 저장 기준 경로 |
 | `inference.load_mode` | `"adapters"` | `"adapters"`: Hub NF4 + partial_state.pt + adapter 스태킹. `"merged"`: standalone full model 직접 로드 |
-| `inference.adapters` | `[]` | 적재할 adapter 목록 (`{path, name}` 형태). 비어있으면 pre-stage base model로 추론 |
+| `inference.adapters` | `[]` | 적재할 adapter 목록 (`{path, name}` 형태). 비어있으면 embed-align base model로 추론 |
 | `input.mode` | `"jsonl_file"` | 입력 소스: `jsonl_file` / `jsonl_dir` / `arrow` / `txt_dir` |
 | `input.max_samples` | `30` | 처리할 최대 샘플 수 (`null`이면 전체) |
 | `input.plan_ids` | `null` | 처리할 plan_id 리스트 (`null`이면 전체) |
@@ -921,7 +921,7 @@ You are a floor plan generator. Given room conditions, generate complete floorpl
 | Step 2 | 커스텀 Vocabulary 빌드 | ✅ 완료 |
 | Step 3 | JSONL → Arrow 변환 | ✅ 완료 |
 | Step 4 | 데이터 증강 + 토크나이징 | ✅ 완료 |
-| Pre-Stage | 새 토큰 Embedding 워밍업 훈련 | ✅ 완료 |
+| Embedding Alignment | 새 토큰 Embedding 워밍업 훈련 | ✅ 완료 |
 | SFT | LoRA Fine-tuning (attention/MLP 전 레이어) | ✅ 완료 |
 | ~~Stage 2~~ | ~~DPO Fine-tuning~~ | ❌ 미진행 (계획 취소) |
 | Stage 2 | GRPO (GDPO) 강화학습 + vllm colocate | ✅ 완료 |

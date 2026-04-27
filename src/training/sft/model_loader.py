@@ -1,9 +1,9 @@
 """SFT 모델 로드 및 LoRA 설정 모듈.
 
-HF Hub에서 base model을 로드하고, pre_stage/final의 partial_state.pt로 커스텀 토큰 가중치를
+HF Hub에서 base model을 로드하고, embed_align/final의 partial_state.pt로 커스텀 토큰 가중치를
 적용한 뒤 LoRA(Low-Rank Adaptation)를 적용한다.
 
-Pre-Stage resume과 유사한 패턴:
+Embedding Alignment resume과 유사한 패턴:
   - 모델 로드 출처: HF Hub (cfg.model.hub_id)
   - resize_token_embeddings(): 커스텀 토큰 수만큼 vocab 확장
   - partial_state.pt 적용: embed_tokens / lm_head의 새 토큰 행에 훈련된 가중치 덮어쓰기
@@ -74,7 +74,7 @@ def load_base_model_with_partial_state(
     # 4bit 양자화 설정
     bnb_config = _build_bnb_config(cfg.quantization)
 
-    # HF Hub에서 base model 로드 (Pre-Stage와 동일한 출처)
+    # HF Hub에서 base model 로드 (Embedding Alignment와 동일한 출처)
     logger.info(f"base model 로드 중 (HF Hub): {hub_id}")
     model = AutoModelForCausalLM.from_pretrained(
         hub_id,
@@ -87,7 +87,7 @@ def load_base_model_with_partial_state(
     model.resize_token_embeddings(len(tokenizer))
     logger.info(f"vocab 확장 완료. vocab_size: {model.config.vocab_size}")
 
-    # partial_state.pt 로드하여 커스텀 토큰 행에 Pre-Stage 훈련된 가중치 주입
+    # partial_state.pt 로드하여 커스텀 토큰 행에 Embedding Alignment 훈련된 가중치 주입
     # embed_tokens / lm_head는 4bit 양자화 대상이 아니므로 (bf16) 직접 인덱싱 가능
     logger.info(f"partial_state.pt 로드 및 커스텀 토큰 가중치 적용 중: {partial_state_path}")
     partial_state = torch.load(str(partial_state_path), map_location="cpu", weights_only=True)
@@ -124,7 +124,7 @@ def load_model_and_tokenizer(
 ) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
     """HF Hub base model을 로드하고 partial_state.pt 적용 후 LoRA를 붙인다.
 
-    Pre-Stage resume과 동일한 패턴으로:
+    Embedding Alignment resume과 동일한 패턴으로:
       1. load_base_model_with_partial_state()로 base model + partial_state 주입
       2. build_lora_config() + get_peft_model()로 LoRA adapter 부착
 
@@ -142,7 +142,7 @@ def load_model_and_tokenizer(
     model_dir = Path(cfg.model.model_dir)
 
     if not model_dir.exists():
-        raise FileNotFoundError(f"pre_stage/final 디렉토리를 찾을 수 없음: {model_dir}")
+        raise FileNotFoundError(f"embed_align/final 디렉토리를 찾을 수 없음: {model_dir}")
 
     partial_state_path = model_dir / "partial_state.pt"
 
@@ -215,7 +215,7 @@ def merge_lora_and_save(
     # 해당 역변환(reverse_op)이 미구현 상태라 NotImplementedError가 발생한다.
     # merge_and_unload 이후에도 transformer 레이어는 여전히 NF4 4bit 상태이며,
     # revert_weight_conversion은 이를 원래 dtype으로 복원하려 하지만 실패함.
-    # pre_stage의 validate_quantization_for_training 패치와 동일한 방식으로
+    # embed_align의 validate_quantization_for_training 패치와 동일한 방식으로
     # modeling_utils 네임스페이스의 함수를 일시 no-op으로 교체하여 우회한다.
     import transformers.modeling_utils as _modeling_module
 

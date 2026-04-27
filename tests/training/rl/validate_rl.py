@@ -91,9 +91,9 @@ def phase0_file_existence() -> bool:
             missing.append(rel_path)
 
     # partial_state.pt 확인
-    partial_state_path = Path(_PROJECT_ROOT) / "data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/final/partial_state.pt"
+    partial_state_path = Path(_PROJECT_ROOT) / "data/models/Qwen2.5-Coder-7B/checkpoints/embed_align/final/partial_state.pt"
     if partial_state_path.exists():
-        logger.info(f"  [OK] pre_stage partial_state.pt: {partial_state_path}")
+        logger.info(f"  [OK] embed_align partial_state.pt: {partial_state_path}")
     else:
         logger.warning(f"  [WARNING] partial_state.pt 없음: {partial_state_path} (Phase 2-3 실행 불가)")
 
@@ -507,7 +507,7 @@ def _create_dummy_sft_adapter(cfg, output_dir: Path) -> bool:
 
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        partial_state_path = Path(_PROJECT_ROOT) / str(cfg.model.pre_stage_dir) / "partial_state.pt"
+        partial_state_path = Path(_PROJECT_ROOT) / str(cfg.model.embed_align_dir) / "partial_state.pt"
         logger.info("더미 SFT adapter 생성 중 (Hub 모델 로드)...")
         base_model, tokenizer = load_base_model_with_partial_state(cfg, partial_state_path)
 
@@ -550,7 +550,7 @@ def phase2_model_load() -> bool:
         return False
 
     # 필수 경로 존재 확인
-    partial_state_path = Path(_PROJECT_ROOT) / str(cfg.model.pre_stage_dir) / "partial_state.pt"
+    partial_state_path = Path(_PROJECT_ROOT) / str(cfg.model.embed_align_dir) / "partial_state.pt"
     sft_adapter_dir = Path(_PROJECT_ROOT) / str(cfg.model.sft_adapter_dir)
     if not partial_state_path.exists():
         logger.error(f"partial_state.pt 없음: {partial_state_path}")
@@ -741,7 +741,7 @@ def phase3_mini_training(use_vllm: bool = False) -> bool:
         logger.error(f"설정 로드 실패: {e}")
         return False
 
-    partial_state_path = Path(_PROJECT_ROOT) / str(cfg.model.pre_stage_dir) / "partial_state.pt"
+    partial_state_path = Path(_PROJECT_ROOT) / str(cfg.model.embed_align_dir) / "partial_state.pt"
     sft_adapter_dir = Path(_PROJECT_ROOT) / str(cfg.model.sft_adapter_dir)
     if not partial_state_path.exists():
         logger.error(f"partial_state.pt 없음: {partial_state_path}")

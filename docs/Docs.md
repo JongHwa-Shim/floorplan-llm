@@ -15,7 +15,7 @@
 7. [Step 2: Vocabulary 빌드](#7-step-2-vocabulary-빌드)
 8. [Step 3: JSONL → Arrow 변환](#8-step-3-jsonl--arrow-변환)
 9. [Step 4: 데이터 증강 + 토크나이징](#9-step-4-데이터-증강--토크나이징)
-10. [Pre-Stage: 새 토큰 Embedding 워밍업](#10-pre-stage-새-토큰-embedding-워밍업)
+10. [Embedding Alignment: 새 토큰 Embedding 워밍업](#10-embedding-alignment-새-토큰-embedding-워밍업)
 11. [Step 5: LLM 학습](#11-step-5-llm-학습)
 12. [Step 6: 추론 및 시각화](#12-step-6-추론-및-시각화)
 
@@ -44,7 +44,7 @@
    평면도 PNG → 정보 추출 → JSONL → Vocab 빌드 → Arrow 변환 → 증강 파이프라인
 
 ② LLM 훈련
-   Pretrained LLM + 커스텀 토큰 → Pre-Stage → 2-Stage Fine-tune (SFT → GRPO) → 평면도 생성 모델
+   Pretrained LLM + 커스텀 토큰 → Embedding Alignment → 2-Stage Fine-tune (SFT → GRPO) → 평면도 생성 모델
 
 ③ 추론 + 시각화
    조건 입력 → 모델 추론 → 토큰 시퀀스 → 좌표 복원 → 평면도 시각화
@@ -277,7 +277,7 @@ Chat template으로 구성된 전체 시퀀스에서 **system + user 턴(입력)
 └──────────────────────────┬───────────────────────────┘
                            ▼
 ┌──────────────────────────────────────────────────────┐
-│  Pre-Stage: 새 토큰 Embedding 워밍업                   │
+│  Embedding Alignment: 새 토큰 Embedding 워밍업                   │
 │  새 커스텀 토큰 embed + lm_head 행만 훈련              │
 └──────────────────────────┬───────────────────────────┘
                            ▼
@@ -298,7 +298,7 @@ Chat template으로 구성된 전체 시퀀스에서 **system + user 턴(입력)
 | 2 | Vocabulary 빌드 | Pretrained 토크나이저 | vocab_extension.json + 확장 토크나이저 |
 | 3 | Arrow 변환 | JSONL | Arrow DatasetDict (train/val/test) |
 | 4 | 증강 + 토크나이징 | Arrow + 증강 설정 | (condition_tokens, output_tokens) |
-| Pre-Stage | 새 토큰 Embedding 워밍업 | 토큰 시퀀스 배치 | 워밍업된 embed_tokens + lm_head |
+| Embedding Alignment | 새 토큰 Embedding 워밍업 | 토큰 시퀀스 배치 | 워밍업된 embed_tokens + lm_head |
 | SFT | LoRA Fine-tuning | HF Hub base model + `partial_state.pt` + 토큰 시퀀스 배치 | LoRA adapter Fine-tuned 모델 |
 | GRPO | GDPO 강화학습 | HF Hub base + `partial_state.pt` + SFT adapter + 프롬프트 배치 | RL LoRA adapter |
 | 6 | 추론 + 시각화 | 조건 입력 (JSONL/Arrow/txt) | 평면도 JSON + 토큰 텍스트 + 이미지 |
@@ -536,7 +536,7 @@ output_tokens = build_output_tokens(augmented_sample, vocab)
 
 ---
 
-## 10. Pre-Stage: 새 토큰 Embedding 워밍업
+## 10. Embedding Alignment: 새 토큰 Embedding 워밍업
 
 ### 목적
 
@@ -589,10 +589,10 @@ PEFT 어댑터(LoRA)는 이 단계에서 사용하지 않는다.
 
 `resume.enabled=true`로 중단된 훈련을 재개할 수 있다.
 
-**체크포인트 저장 구조 (`PreStageTrainer._save_checkpoint` 오버라이드):**
+**체크포인트 저장 구조 (`EmbedAlignTrainer._save_checkpoint` 오버라이드):**
 
 ```
-data/models/{model.name}/checkpoints/pre_stage/{run_name}/
+data/models/{model.name}/checkpoints/embed_align/{run_name}/
 └── checkpoint-{step}/
     ├── partial_state.pt      ← new_embed / new_lm_head 가중치만 별도 저장 (model.safetensors 없음)
     ├── optimizer.pt          ← AdamW state (new_embed, new_lm_head 두 파라미터만, ~16MB)
@@ -621,20 +621,20 @@ data/models/{model.name}/checkpoints/pre_stage/{run_name}/
 
 ```
 config/training/augmentation/
-├── pre_stage.yaml    ← Pre-Stage용 (완료)
-└── sft.yaml          ← SFT용 (완료, pre_stage.yaml과 동일한 증강 전략)
+├── embed_align.yaml    ← Embedding Alignment용 (완료)
+└── sft.yaml          ← SFT용 (완료, embed_align.yaml과 동일한 증강 전략)
 ```
 
-`config/training/pre_stage/pipeline.yaml`의 `defaults` 선언:
+`config/training/embed_align/pipeline.yaml`의 `defaults` 선언:
 ```yaml
 defaults:
-  - training/augmentation: pre_stage   # cfg.augmentation으로 병합
+  - training/augmentation: embed_align   # cfg.augmentation으로 병합
   - _self_                             # pipeline.yaml 값이 최우선
 ```
 
-- config 루트(`config/`)가 탐색 기준이므로 `training/augmentation: pre_stage` →
-  `config/training/augmentation/pre_stage.yaml` 탐색
-- `pre_stage.yaml` 내부는 `augmentation:` 래퍼 없이 내용만 작성 (group 이름이 키를 자동 생성)
+- config 루트(`config/`)가 탐색 기준이므로 `training/augmentation: embed_align` →
+  `config/training/augmentation/embed_align.yaml` 탐색
+- `embed_align.yaml` 내부는 `augmentation:` 래퍼 없이 내용만 작성 (group 이름이 키를 자동 생성)
 - SFT, GRPO 파이프라인도 동일한 패턴으로 증강 설정 재사용/오버라이드 가능
 
 ### 데이터 구성 및 Chat Template
@@ -657,22 +657,22 @@ You are a floor plan generator. Given room conditions, generate complete floorpl
 
 | 파일 | 역할 |
 |------|------|
-| `src/training/pre_stage/model_loader.py` | 4bit 로드 + `prepare_model_for_kbit_training` + `PartialEmbedding`/`PartialLMHead` 교체 + `merge_and_restore` (기본 흐름에서 미사용) |
-| `src/training/pre_stage/dataset.py` | Arrow 로드 → 증강 → Chat Template 적용 → `{input_ids, labels, attention_mask}` |
-| `src/training/pre_stage/collator.py` | Dynamic padding + label 마스킹 |
-| `src/training/pre_stage/trainer.py` | `TrainingArguments` 구성 + `PreStageTrainer` 빌드 (`_save_checkpoint`, `_load_from_checkpoint`, `_load_best_model` 오버라이드 포함) |
-| `scripts/training/run_pre_stage.py` | Hydra 진입점, seed 고정, Resume 분기, 훈련 후 `partial_state.pt` + optimizer 저장 |
-| `config/training/pre_stage/pipeline.yaml` | 모델, 양자화, 데이터, 훈련 하이퍼파라미터, resume 설정 |
-| `config/training/augmentation/pre_stage.yaml` | Pre-Stage용 증강 파라미터 (Hydra config group, `cfg.augmentation`으로 병합) |
-| `tests/training/pre_stage/validate_resume.py` | Resume 체크포인트 검증 스크립트 (partial_state.pt 존재/형태/복원 확인) |
-| `tests/training/pre_stage/validate_save_and_load.py` | 저장/로드 후 optimizer 업데이트 정상 동작 검증 (체크포인트 저장 후 훈련이 계속 진행되는지 2-case 검증) |
+| `src/training/embed_align/model_loader.py` | 4bit 로드 + `prepare_model_for_kbit_training` + `PartialEmbedding`/`PartialLMHead` 교체 + `merge_and_restore` (기본 흐름에서 미사용) |
+| `src/training/embed_align/dataset.py` | Arrow 로드 → 증강 → Chat Template 적용 → `{input_ids, labels, attention_mask}` |
+| `src/training/embed_align/collator.py` | Dynamic padding + label 마스킹 |
+| `src/training/embed_align/trainer.py` | `TrainingArguments` 구성 + `EmbedAlignTrainer` 빌드 (`_save_checkpoint`, `_load_from_checkpoint`, `_load_best_model` 오버라이드 포함) |
+| `scripts/training/run_embed_align.py` | Hydra 진입점, seed 고정, Resume 분기, 훈련 후 `partial_state.pt` + optimizer 저장 |
+| `config/training/embed_align/pipeline.yaml` | 모델, 양자화, 데이터, 훈련 하이퍼파라미터, resume 설정 |
+| `config/training/augmentation/embed_align.yaml` | Embedding Alignment용 증강 파라미터 (Hydra config group, `cfg.augmentation`으로 병합) |
+| `tests/training/embed_align/validate_resume.py` | Resume 체크포인트 검증 스크립트 (partial_state.pt 존재/형태/복원 확인) |
+| `tests/training/embed_align/validate_save_and_load.py` | 저장/로드 후 optimizer 업데이트 정상 동작 검증 (체크포인트 저장 후 훈련이 계속 진행되는지 2-case 검증) |
 | `src/utils/extract_partial_state.py` | 구 포맷 `model.safetensors`에서 커스텀 토큰 가중치만 추출하는 핵심 로직 |
 | `scripts/utils/extract_partial_state.py` | 위 추출 로직의 argparse CLI 진입점 |
 | `tests/utils/test_extract_partial_state.py` | 합성 단위 + 실제 파일 통합 검증 (2-Phase) |
 
 ### 레거시 체크포인트에서 partial_state.pt 추출
 
-Pre-Stage 저장 방식 변경 이전에는 훈련 완료 후 `merge_and_restore()` → `save_pretrained()`를 호출하여 frozen base 가중치와 훈련된 커스텀 토큰 가중치를 단일 `model.safetensors`로 병합 저장했다.
+Embedding Alignment 저장 방식 변경 이전에는 훈련 완료 후 `merge_and_restore()` → `save_pretrained()`를 호출하여 frozen base 가중치와 훈련된 커스텀 토큰 가중치를 단일 `model.safetensors`로 병합 저장했다.
 
 이 파일에서 새 토큰 행만 분리하면 현재 코드와 완전히 호환되는 `partial_state.pt`를 복원할 수 있다.
 
@@ -692,19 +692,19 @@ partial_state.pt
 └── "new_token_ids"   list[int]
 ```
 
-`new_token_ids`는 `vocab_extension.json`의 `base_vocab_size`를 기준으로 결정한다 (`token_id >= base_vocab_size`인 ID 정렬). 이 로직은 Pre-Stage `model_loader.py`의 `_load_new_token_ids()`와 동일하다.
+`new_token_ids`는 `vocab_extension.json`의 `base_vocab_size`를 기준으로 결정한다 (`token_id >= base_vocab_size`인 ID 정렬). 이 로직은 Embedding Alignment `model_loader.py`의 `_load_new_token_ids()`와 동일하다.
 
 **safetensors 로드 방식:** 전체 파일을 메모리에 올리지 않고 `safetensors.safe_open()`으로 `embed_tokens`, `lm_head` 두 텐서만 읽는다. sharded 포맷(`model.safetensors.index.json`)도 지원한다.
 
 ### 체크포인트 및 출력
 
 ```
-outputs/training/pre_stage/
+outputs/training/embed_align/
 └── YYYY-MM-DD/HH-MM-SS/       # Hydra 실행 로그 + 설정 스냅샷
 
 data/models/{model.name}/
-└── checkpoints/pre_stage/
-    └── {run_name}/             # run_name별 독립 저장 (기본: floorplan-pre-stage)
+└── checkpoints/embed_align/
+    └── {run_name}/             # run_name별 독립 저장 (기본: floorplan-embed-align)
         ├── checkpoint-{step}/  # 에폭별 자동 저장 (save_total_limit 초과 시 오래된 것 삭제)
         │   ├── partial_state.pt    # new_embed / new_lm_head 가중치 (model.safetensors 없음)
         │   ├── optimizer.pt        # AdamW state (~16MB)
@@ -723,17 +723,17 @@ data/models/{model.name}/
 
 ### 2-Stage Fine-tuning 전략
 
-Pre-Stage에서 워밍업된 커스텀 토큰 가중치(`partial_state.pt`)를 HF Hub base model에 주입한 뒤 2단계 fine-tuning을 수행한다. LLM 학습 시 QLoRA(Quantized LoRA)를 사용한다. 혼합 정밀도(bf16 AMP)를 적용한다.
+Embedding Alignment에서 워밍업된 커스텀 토큰 가중치(`partial_state.pt`)를 HF Hub base model에 주입한 뒤 2단계 fine-tuning을 수행한다. LLM 학습 시 QLoRA(Quantized LoRA)를 사용한다. 혼합 정밀도(bf16 AMP)를 적용한다.
 
 ### Stage 1: SFT (Supervised Fine-tuning) — 완료
 
 #### 목적
 
-Pre-Stage 워밍업 이후, LoRA(Low-Rank Adaptation)를 통해 Transformer 전체 레이어를 fine-tuning하여 모델이 평면도 생성 태스크에 적응하도록 한다.
+Embedding Alignment 워밍업 이후, LoRA(Low-Rank Adaptation)를 통해 Transformer 전체 레이어를 fine-tuning하여 모델이 평면도 생성 태스크에 적응하도록 한다.
 
-#### Pre-Stage와의 차이점
+#### Embedding Alignment와의 차이점
 
-| 항목 | Pre-Stage | SFT |
+| 항목 | Embedding Alignment | SFT |
 |------|-----------|-----|
 | 모델 로드 출처 | HF Hub | HF Hub (+ `partial_state.pt` 커스텀 토큰 가중치 주입) |
 | 훈련 범위 | new_embed/lm_head 행 567개 | LoRA adapter (attention/MLP 전 레이어) |
@@ -795,7 +795,7 @@ LoRA adapter를 base model에 병합하여 standalone 표준 HuggingFace 형식�
 
 기본 훈련 흐름(`run_sft.py`)에서는 더 이상 호출하지 않는다. adapter만 저장하는 방식(`PeftModel.save_pretrained`)으로 변경되었으며, 이 함수는 PEFT 의존성 없이 standalone 추론 모델이 필요하거나 다음 Stage에서 full model이 요구될 때 수동으로 호출하기 위해 유지한다.
 
-`model.merge_and_unload()` 이후 `save_pretrained()` 호출 시, transformers 4.51+에서 `revert_weight_conversion()`이 NF4 역변환을 시도하다 `NotImplementedError`를 발생시키는 버그가 있다. 이를 `transformers.modeling_utils.revert_weight_conversion`을 일시적으로 no-op으로 패치하여 우회한다 (Pre-Stage의 `validate_quantization_for_training` 패치와 동일한 방식).
+`model.merge_and_unload()` 이후 `save_pretrained()` 호출 시, transformers 4.51+에서 `revert_weight_conversion()`이 NF4 역변환을 시도하다 `NotImplementedError`를 발생시키는 버그가 있다. 이를 `transformers.modeling_utils.revert_weight_conversion`을 일시적으로 no-op으로 패치하여 우회한다 (Embedding Alignment의 `validate_quantization_for_training` 패치와 동일한 방식).
 
 #### 체크포인트 및 출력
 
@@ -826,19 +826,19 @@ data/models/{model.name}/checkpoints/sft/{run_name}/
 | `src/training/sft/trainer.py` | `TrainingArguments` + 표준 `Trainer` 빌드 (패치 불필요) |
 | `scripts/training/run_sft.py` | Hydra 진입점, seed 고정, Resume 분기, 훈련 후 adapter + optimizer 저장 |
 | `config/training/sft/pipeline.yaml` | LoRA, 학습률, model_dir 등 SFT 전체 설정 |
-| `config/training/augmentation/sft.yaml` | SFT용 증강 파라미터 (pre_stage.yaml과 동일) |
+| `config/training/augmentation/sft.yaml` | SFT용 증강 파라미터 (embed_align.yaml과 동일) |
 | `tests/training/sft/validate_sft.py` | 로드·LoRA구조·훈련·저장·Resume 통합 검증 |
 
 #### DDP (Data Parallel) 지원
 
-Pre-Stage와 SFT 모두 DDP를 지원한다. `distributed.nproc_per_node` 값이 2 이상이면 `main(cfg)` 진입 직후 `os.execvp`로 torchrun 프로세스를 자동으로 띄운다.
+Embedding Alignment와 SFT 모두 DDP를 지원한다. `distributed.nproc_per_node` 값이 2 이상이면 `main(cfg)` 진입 직후 `os.execvp`로 torchrun 프로세스를 자동으로 띄운다.
 
 **4bit 양자화 + DDP 호환성:**
 - `device_map="auto"`(model parallelism, DDP와 충돌)는 제거됨
 - 4bit 양자화(frozen 가중치)는 `requires_grad=False`이므로 DDP all-reduce 대상 제외 → 호환됨
 - LoRA adapter(bf16, `requires_grad=True`)만 all-reduce됨
 
-**Pre-Stage DDP 주의사항:**
+**Embedding Alignment DDP 주의사항:**
 - `_save_checkpoint`: `is_world_process_zero()` 가드로 rank 0만 `partial_state.pt` 저장
 - `_save_checkpoint` / `_load_from_checkpoint` / `_load_best_model`: DDP 래퍼(`DistributedDataParallel`) 내부 실제 모델에 `.module`으로 접근
 - 최종 저장 시: `trainer.accelerator.unwrap_model(trainer.model)`로 언래핑 후 `partial_state.pt` / adapter 저장 (`is_main_process` 가드)
@@ -846,11 +846,11 @@ Pre-Stage와 SFT 모두 DDP를 지원한다. `distributed.nproc_per_node` 값이
 **실행:**
 ```bash
 # DDP 2-GPU (config에 저장하거나 override로 지정)
-uv run python scripts/training/run_pre_stage.py distributed.nproc_per_node=2
+uv run python scripts/training/run_embed_align.py distributed.nproc_per_node=2
 uv run python scripts/training/run_sft.py distributed.nproc_per_node=2
 
 # 단일 GPU (기본값, 동일 명령어)
-uv run python scripts/training/run_pre_stage.py
+uv run python scripts/training/run_embed_align.py
 uv run python scripts/training/run_sft.py
 ```
 
@@ -1065,7 +1065,7 @@ data/models/{model.name}/checkpoints/rl/{run_name}/
 
 | 구성 | 생성 속도 | 비고 |
 |------|---------|------|
-| Pre-Stage base (adapter 없음) | ~30 tok/s | NF4 base만 사용 |
+| Embedding Alignment base (adapter 없음) | ~30 tok/s | NF4 base만 사용 |
 | SFT DoRA adapter | ~3.5 tok/s | DoRA의 컬럼-노름 재계산 오버헤드 (~8.6× 느림) |
 | SFT LoRA adapter (예상) | ~30 tok/s | LoRA는 forward 중 행렬 추가 연산만 발생 |
 

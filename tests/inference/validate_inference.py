@@ -141,7 +141,7 @@ def phase0_file_check(cfg) -> bool:
 
     if load_mode == "adapters":
         # partial_state.pt 확인
-        partial_state_path = Path(cfg.model.pre_stage_dir) / "partial_state.pt"
+        partial_state_path = Path(cfg.model.embed_align_dir) / "partial_state.pt"
         if partial_state_path.exists():
             _pass(f"partial_state.pt 존재: {partial_state_path}")
         else:
@@ -543,7 +543,7 @@ def _create_dummy_adapters_if_needed(cfg) -> tuple:
         return cfg, []
 
     # 모델을 한 번 로드해서 모든 누락된 adapter를 생성
-    partial_state_path = Path(_PROJECT_ROOT) / str(cfg.model.pre_stage_dir) / "partial_state.pt"
+    partial_state_path = Path(_PROJECT_ROOT) / str(cfg.model.embed_align_dir) / "partial_state.pt"
 
     # cfg를 _load_base_with_partial_state 호출용 최소 형식으로 복제
     from omegaconf import DictConfig as _DictConfig

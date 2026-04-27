@@ -1,6 +1,6 @@
 """병합된 model.safetensors에서 커스텀 토큰 가중치만 추출하여 partial_state.pt로 저장한다.
 
-Pre-Stage 훈련 방식 변경 전, 최종 체크포인트는 merge_and_restore() → save_pretrained()를 통해
+Embedding Alignment 훈련 방식 변경 전, 최종 체크포인트는 merge_and_restore() → save_pretrained()를 통해
 new_embed + frozen base 가중치를 단일 model.safetensors에 합쳐 저장했다.
 이 모듈은 그 합쳐진 파일에서 새 토큰 행(new_token_ids)만 슬라이싱하여
 현재 코드와 호환되는 partial_state.pt를 복원한다.

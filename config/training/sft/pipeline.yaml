@@ -1,6 +1,6 @@
 # SFT(Supervised Fine-Tuning) 훈련 파이프라인 설정
-# Pre-Stage에서 워밍업된 모델을 입력으로 LoRA를 적용한 전체 레이어 fine-tuning.
-# 모델 로드: HF Hub base model + final_checkpoints/pre_stage/partial_state.pt 적용.
+# Embedding Alignment에서 워밍업된 모델을 입력으로 LoRA를 적용한 전체 레이어 fine-tuning.
+# 모델 로드: HF Hub base model + final_checkpoints/embed_align/partial_state.pt 적용.
 
 hydra:
   run:
@@ -11,8 +11,8 @@ model:
   name: "Qwen2.5-Coder-7B"
   hub_id: "${model.user}/${model.name}"  # HF Hub에서 base model 로드에 사용
   # partial_state.pt 위치: 훈련 결과를 직접 관리하는 final_checkpoints/ 사용
-  # (checkpoints/pre_stage/final/은 훈련 반복 시 덮어씌워질 수 있음)
-  model_dir: "data/models/${model.name}/final_checkpoints/pre_stage"
+  # (checkpoints/embed_align/final/은 훈련 반복 시 덮어씌워질 수 있음)
+  model_dir: "data/models/${model.name}/final_checkpoints/embed_align"
   # 토크나이저는 훈련 단계와 무관하게 공통 tokenization/ 경로에서 로드
   tokenizer_dir: "data/models/${model.name}/tokenization"
   vocab_extension: "${model.tokenizer_dir}/vocab_extension.json"

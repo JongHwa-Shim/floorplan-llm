@@ -7,7 +7,7 @@ model:
   user: "Qwen"
   name: "Qwen2.5-Coder-7B"
   hub_id: "${model.user}/${model.name}"                                              # HF Hub 전체 경로
-  pre_stage_dir: "data/models/${model.name}/checkpoints/pre_stage/final"             # partial_state.pt 위치
+  embed_align_dir: "data/models/${model.name}/checkpoints/embed_align/final"             # partial_state.pt 위치
   sft_adapter_dir: "data/models/${model.name}/checkpoints/sft/final"                 # SFT adapter 위치 (frozen)
   tokenizer_dir: "data/models/${model.name}/tokenization"                            # 확장 토크나이저 경로
   vocab_extension: "${model.tokenizer_dir}/vocab_extension.json"

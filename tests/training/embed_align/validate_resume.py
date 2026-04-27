@@ -5,11 +5,11 @@ partial_state.pt 로드 → new_embed/new_lm_head 복원 → embed 값 일치 �
 
 사용법:
     # 최신 체크포인트 자동 탐색
-    uv run python tests/training/pre_stage/validate_resume.py
+    uv run python tests/training/embed_align/validate_resume.py
 
     # 특정 체크포인트 지정
-    uv run python tests/training/pre_stage/validate_resume.py \
-        --checkpoint data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/checkpoint-80304
+    uv run python tests/training/embed_align/validate_resume.py \
+        --checkpoint data/models/Qwen2.5-Coder-7B/checkpoints/embed_align/checkpoint-80304
 """
 
 import argparse
@@ -24,7 +24,7 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from src.training.pre_stage.model_loader import PartialEmbedding, PartialLMHead
+from src.training.embed_align.model_loader import PartialEmbedding, PartialLMHead
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -130,7 +130,7 @@ def validate_partial_state(checkpoint_dir: Path) -> bool:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Pre-Stage resume 기능 검증")
+    parser = argparse.ArgumentParser(description="Embedding Alignment resume 기능 검증")
     parser.add_argument(
         "--checkpoint",
         type=str,
@@ -140,7 +140,7 @@ def main():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage",
+        default="data/models/Qwen2.5-Coder-7B/checkpoints/embed_align",
         help="체크포인트 탐색 기준 디렉토리.",
     )
     args = parser.parse_args()

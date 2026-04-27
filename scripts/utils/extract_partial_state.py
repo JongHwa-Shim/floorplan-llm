@@ -1,26 +1,26 @@
 """병합된 model.safetensors에서 partial_state.pt를 추출하는 CLI 스크립트.
 
-Pre-Stage 훈련 방식 변경 전에 저장된 model.safetensors (merge_and_restore 방식)에서
+Embedding Alignment 훈련 방식 변경 전에 저장된 model.safetensors (merge_and_restore 방식)에서
 커스텀 토큰 가중치(new_embed, new_lm_head)만 분리하여 현재 코드와 호환되는
 partial_state.pt를 생성한다.
 
 사용 예시:
     # 기본 실행 (출력 경로 자동 결정)
     uv run python scripts/utils/extract_partial_state.py \\
-        --checkpoint_dir data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/final \\
+        --checkpoint_dir data/models/Qwen2.5-Coder-7B/checkpoints/embed_align/final \\
         --model_name Qwen2.5-Coder-7B
 
-    # 출력 경로 지정 (final_checkpoints/pre_stage로 직접 추출)
+    # 출력 경로 지정 (final_checkpoints/embed_align로 직접 추출)
     uv run python scripts/utils/extract_partial_state.py \\
-        --checkpoint_dir data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/final \\
+        --checkpoint_dir data/models/Qwen2.5-Coder-7B/checkpoints/embed_align/final \\
         --model_name Qwen2.5-Coder-7B \\
-        --output_path data/models/Qwen2.5-Coder-7B/final_checkpoints/pre_stage/partial_state.pt
+        --output_path data/models/Qwen2.5-Coder-7B/final_checkpoints/embed_align/partial_state.pt
 
     # dtype 변환 (bfloat16으로 저장)
     uv run python scripts/utils/extract_partial_state.py \\
-        --checkpoint_dir data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/final \\
+        --checkpoint_dir data/models/Qwen2.5-Coder-7B/checkpoints/embed_align/final \\
         --model_name Qwen2.5-Coder-7B \\
-        --output_path data/models/Qwen2.5-Coder-7B/final_checkpoints/pre_stage/partial_state.pt \\
+        --output_path data/models/Qwen2.5-Coder-7B/final_checkpoints/embed_align/partial_state.pt \\
         --dtype bfloat16
 
     # vocab_extension.json 경로 직접 지정

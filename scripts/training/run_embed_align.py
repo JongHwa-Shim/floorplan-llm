@@ -1,30 +1,30 @@
-"""Pre-Stage 훈련 실행 스크립트.
+"""Embedding Alignment 훈련 실행 스크립트.
 
 새 커스텀 토큰의 embedding과 lm_head 행만 훈련하는 워밍업 단계.
 Transformer 레이어 전체는 동결된 상태로, PartialEmbedding / PartialLMHead 모듈을 통해
 새 토큰 567행만 nn.Parameter로 분리하여 optimizer state를 최소화한다.
 
 사용법:
-    # 기본 실행 (config/training/pre_stage/pipeline.yaml 사용)
-    uv run python scripts/training/run_pre_stage.py
+    # 기본 실행 (config/training/embed_align/pipeline.yaml 사용)
+    uv run python scripts/training/run_embed_align.py
 
     # DDP 멀티 GPU (2개)
-    uv run torchrun --nproc_per_node=2 scripts/training/run_pre_stage.py
+    uv run torchrun --nproc_per_node=2 scripts/training/run_embed_align.py
 
     # 하이퍼파라미터 오버라이드
-    uv run python scripts/training/run_pre_stage.py training.learning_rate=1e-3
+    uv run python scripts/training/run_embed_align.py training.learning_rate=1e-3
 
     # 디버그 모드 (10 step만 실행)
-    uv run python scripts/training/run_pre_stage.py training.max_steps=10
+    uv run python scripts/training/run_embed_align.py training.max_steps=10
 
     # W&B 비활성화
-    uv run python scripts/training/run_pre_stage.py training.report_to=none
+    uv run python scripts/training/run_embed_align.py training.report_to=none
 
     # Resume: 최신 체크포인트 자동 탐색
-    uv run python scripts/training/run_pre_stage.py resume.enabled=true
+    uv run python scripts/training/run_embed_align.py resume.enabled=true
 
     # Resume: 특정 체크포인트 지정
-    uv run python scripts/training/run_pre_stage.py resume.enabled=true resume.checkpoint_path=data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/checkpoint-500
+    uv run python scripts/training/run_embed_align.py resume.enabled=true resume.checkpoint_path=data/models/Qwen2.5-Coder-7B/checkpoints/embed_align/checkpoint-500
 """
 
 import logging
@@ -43,12 +43,12 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from src.training.pre_stage import (
-    PreStageDataset,
+from src.training.embed_align import (
+    EmbedAlignDataset,
     build_trainer,
     load_model_and_tokenizer,
 )
-from src.training.pre_stage.model_loader import PartialEmbedding, PartialLMHead
+from src.training.embed_align.model_loader import PartialEmbedding, PartialLMHead
 
 logger = logging.getLogger(__name__)
 
@@ -117,17 +117,17 @@ def _resolve_checkpoint(cfg: DictConfig) -> str | None:
 
 
 @hydra.main(
-    config_path=os.path.join(_PROJECT_ROOT, "config", "training", "pre_stage"),
+    config_path=os.path.join(_PROJECT_ROOT, "config", "training", "embed_align"),
     config_name="pipeline",
     version_base="1.3",
 )
 def main(cfg: DictConfig) -> None:
-    """Pre-Stage 훈련 메인 함수.
+    """Embedding Alignment 훈련 메인 함수.
 
     Args:
         cfg: Hydra가 주입하는 DictConfig.
     """
-    logger.info("=== Pre-Stage 훈련 시작 ===")
+    logger.info("=== Embedding Alignment 훈련 시작 ===")
 
     # DDP 재시작: distributed.nproc_per_node > 1이고 아직 torchrun 하위 프로세스가 아니면
     # os.execvp로 현재 프로세스를 torchrun으로 교체한다.
@@ -167,8 +167,8 @@ def main(cfg: DictConfig) -> None:
 
     # 데이터셋 로드 (증강 파이프라인 포함)
     logger.info("데이터셋 로드 중...")
-    train_dataset = PreStageDataset(cfg, tokenizer, split="train", seed=seed)
-    eval_dataset = PreStageDataset(cfg, tokenizer, split="validation", seed=seed + 1)
+    train_dataset = EmbedAlignDataset(cfg, tokenizer, split="train", seed=seed)
+    eval_dataset = EmbedAlignDataset(cfg, tokenizer, split="validation", seed=seed + 1)
 
     # Trainer 구성
     trainer = build_trainer(
@@ -227,7 +227,7 @@ def main(cfg: DictConfig) -> None:
         trainer.state.save_to_json(str(output_dir / "trainer_state.json"))
         tokenizer.save_pretrained(str(output_dir))
 
-    logger.info("=== Pre-Stage 훈련 완료 ===")
+    logger.info("=== Embedding Alignment 훈련 완료 ===")
 
 
 if __name__ == "__main__":

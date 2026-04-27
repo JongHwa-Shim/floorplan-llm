@@ -1,6 +1,6 @@
 """RL 모델 로더 모듈.
 
-Mod Record: 참조 코드(temp/rl_context)에서는 pre_stage.model_loader.load_model_with_partial_state를
+Mod Record: 참조 코드(temp/rl_context)에서는 embed_align.model_loader.load_model_with_partial_state를
 호출했으나, 해당 함수가 현재 브랜치에 없음. 대신 sft.model_loader.load_base_model_with_partial_state를
 공개 API로 추출하여 재사용한다.
 
@@ -134,11 +134,11 @@ def load_model_and_tokenizer(cfg: DictConfig) -> tuple:
             - tokenizer: 커스텀 토큰이 포함된 AutoTokenizer
 
     Raises:
-        FileNotFoundError: pre_stage_dir/partial_state.pt 또는 sft_adapter_dir가 없을 경우.
+        FileNotFoundError: embed_align_dir/partial_state.pt 또는 sft_adapter_dir가 없을 경우.
     """
-    pre_stage_dir = Path(cfg.model.pre_stage_dir)
+    embed_align_dir = Path(cfg.model.embed_align_dir)
     sft_adapter_dir = Path(cfg.model.sft_adapter_dir)
-    partial_state_path = pre_stage_dir / "partial_state.pt"
+    partial_state_path = embed_align_dir / "partial_state.pt"
 
     if not partial_state_path.exists():
         raise FileNotFoundError(f"partial_state.pt를 찾을 수 없음: {partial_state_path}")

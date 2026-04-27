@@ -1,6 +1,6 @@
 """SFT(Supervised Fine-Tuning) 훈련 실행 스크립트.
 
-Pre-Stage에서 워밍업된 로컬 모델(pre_stage/final)에 LoRA를 적용하여
+Embedding Alignment에서 워밍업된 로컬 모델(embed_align/final)에 LoRA를 적용하여
 전체 attention/MLP 레이어를 fine-tuning하는 단계.
 
 사용법:
@@ -156,12 +156,12 @@ def main(cfg: DictConfig) -> None:
     # Resume 체크포인트 경로 결정
     resume_checkpoint = _resolve_checkpoint(cfg)
 
-    # 모델 + 토크나이저 로드 (로컬 pre_stage/final + LoRA 적용)
+    # 모델 + 토크나이저 로드 (로컬 embed_align/final + LoRA 적용)
     logger.info("모델 및 토크나이저 로드 중...")
     model, tokenizer = load_model_and_tokenizer(cfg)
 
     # 데이터셋 로드 (증강 파이프라인 포함)
-    # SFTDataset = PreStageDataset alias: 데이터 포맷 동일
+    # SFTDataset = EmbedAlignDataset alias: 데이터 포맷 동일
     logger.info("데이터셋 로드 중...")
     train_dataset = SFTDataset(cfg, tokenizer, split="train", seed=seed)
     eval_dataset = SFTDataset(cfg, tokenizer, split="validation", seed=seed + 1)

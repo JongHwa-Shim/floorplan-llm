@@ -3,7 +3,7 @@
 다음 4개 Phase를 순서대로 검증한다:
 
   Phase 0. 파일 존재 확인 (모델 로드 없음)
-    - pre_stage/final/ 필수 파일 존재 여부 확인
+    - embed_align/final/ 필수 파일 존재 여부 확인
     - vocab_extension.json 존재 여부 확인
 
   Phase 1. 모델 로드 + 구조 검증 (모델 로드 1회)
@@ -40,9 +40,9 @@
     # 전체 검증 (권장)
     uv run python tests/training/sft/validate_sft.py
 
-    # pre_stage/final 경로 직접 지정
+    # embed_align/final 경로 직접 지정
     uv run python tests/training/sft/validate_sft.py \\
-        --model_dir data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/final
+        --model_dir data/models/Qwen2.5-Coder-7B/checkpoints/embed_align/final
 """
 
 import argparse
@@ -228,10 +228,10 @@ class SaveAtStepCallback(TrainerCallback):
 # ── Phase 0: 파일 존재 확인 ────────────────────────────────────────────────
 
 def phase0_file_existence(model_dir: str) -> bool:
-    """pre_stage/final 디렉토리의 필수 파일 존재를 확인한다.
+    """embed_align/final 디렉토리의 필수 파일 존재를 확인한다.
 
     Args:
-        model_dir: pre_stage/final 경로 문자열.
+        model_dir: embed_align/final 경로 문자열.
 
     Returns:
         검증 통과 여부.
@@ -253,7 +253,7 @@ def phase0_file_existence(model_dir: str) -> bool:
         passed = False
 
     # tokenizer 파일과 vocab_extension.json은 tokenizer_dir(tokenization/)에 위치
-    # model_dir(checkpoints/pre_stage/final/)이 아님
+    # model_dir(checkpoints/embed_align/final/)이 아님
     cfg_tmp = OmegaConf.load(
         Path(_PROJECT_ROOT) / "config" / "training" / "sft" / "pipeline.yaml"
     )
@@ -679,7 +679,7 @@ def main() -> None:
         "--model_dir",
         type=str,
         default=None,
-        help="pre_stage/final 모델 경로. 미지정 시 pipeline.yaml 기본값 사용.",
+        help="embed_align/final 모델 경로. 미지정 시 pipeline.yaml 기본값 사용.",
     )
     args = parser.parse_args()
 
