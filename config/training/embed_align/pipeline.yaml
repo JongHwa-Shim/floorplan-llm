@@ -1,6 +1,6 @@
 hydra:
   run:
-    dir: outputs/training/pre_stage/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    dir: outputs/training/embed_align/${now:%Y-%m-%d}/${now:%H-%M-%S}
 
 model:
   user: "Qwen"                  # HuggingFace Hub 사용자(조직)명
@@ -22,7 +22,7 @@ data:
   # 최대 시퀀스 길이 (초과 시 잘라냄)
   max_length: 4096
   # 증강 설정 yaml 경로 (프로젝트 루트 기준 상대경로)
-  aug_pipeline_config: "config/training/augmentation/pre_stage.yaml"
+  aug_pipeline_config: "config/training/augmentation/embed_align.yaml"
 
 distributed:
   # 사용할 GPU 수. 1이면 단일 GPU 모드, 2 이상이면 torchrun DDP로 자동 전환
@@ -31,7 +31,7 @@ distributed:
 resume:
   enabled: false
   # 특정 체크포인트 경로 직접 지정 (null이면 auto_find_latest 동작)
-  # 예: "data/models/Qwen2.5-Coder-7B/checkpoints/pre_stage/checkpoint-500"
+  # 예: "data/models/Qwen2.5-Coder-7B/checkpoints/embed_align/checkpoint-500"
   checkpoint_path: null
   # enabled=true이고 checkpoint_path=null이면 output_dir에서 최신 체크포인트 자동 탐색
   auto_find_latest: true
@@ -42,7 +42,7 @@ training:
   per_device_eval_batch_size: 4
   # 실효 배치 = per_device * gradient_accumulation_steps
   gradient_accumulation_steps: 1
-  # Pre-Stage는 새 토큰 embedding 워밍업이므로 공격적인 LR 사용
+  # Embedding Alignment는 새 토큰 embedding 워밍업이므로 공격적인 LR 사용
   learning_rate: 5.0e-4
   lr_scheduler_type: "cosine" # cosine | linear | polynomial | constant | constant_with_warmup | cosine_with_min_lr
   warmup_ratio: 0.05
@@ -55,7 +55,7 @@ training:
   logging_steps: 10
   report_to: "wandb"
   project_name: "floorplan-llm"
-  run_name: "floorplan-pre-stage"
+  run_name: "floorplan-embed-align"
   seed: 42
   # 체크포인트 최대 보존 수 (null = 제한 없이 전체 보존)
   save_total_limit: null
@@ -63,4 +63,4 @@ training:
   load_best_model_at_end: true
   # 디버그용: 0이면 전체 학습
   max_steps: 0
-  output_dir: "data/models/${model.name}/checkpoints/pre_stage/${training.run_name}"
+  output_dir: "data/models/${model.name}/checkpoints/embed_align/${training.run_name}"

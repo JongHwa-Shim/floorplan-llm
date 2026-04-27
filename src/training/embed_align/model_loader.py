@@ -1,4 +1,4 @@
-"""Pre-Stage 모델 로드 및 파라미터 동결 모듈.
+"""Embedding Alignment 모델 로드 및 파라미터 동결 모듈.
 
 4bit 양자화(QDoRA)로 Base LLM을 로드하고,
 새 커스텀 토큰의 embedding 행과 lm_head 행만 훈련 가능하도록 설정한다.
@@ -216,7 +216,7 @@ class PartialLMHead(nn.Module):
 def load_model_and_tokenizer(
     cfg: DictConfig,
 ) -> tuple[AutoModelForCausalLM, AutoTokenizer, list[int]]:
-    """4bit 양자화 모델과 확장 토크나이저를 로드하고 Pre-Stage용으로 설정한다.
+    """4bit 양자화 모델과 확장 토크나이저를 로드하고 Embedding Alignment용으로 설정한다.
 
     Args:
         cfg: Hydra DictConfig. cfg.model, cfg.quantization 섹션을 참조한다.
@@ -279,7 +279,7 @@ def load_model_and_tokenizer(
         f"(+{len(new_token_ids)} 커스텀 토큰)"
     )
 
-    # Pre-Stage 파라미터 설정: 새 토큰 행만 학습 가능하도록 모듈 교체
+    # Embedding Alignment 파라미터 설정: 새 토큰 행만 학습 가능하도록 모듈 교체
     _setup_partial_training(model, new_token_ids)
 
     return model, tokenizer, new_token_ids

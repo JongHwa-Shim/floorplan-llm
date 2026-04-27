@@ -47,7 +47,7 @@ def _load_base_with_partial_state(
 ) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
     """HF Hub base model을 NF4로 로드하고 partial_state.pt의 커스텀 토큰 임베딩을 주입한다.
 
-    Pre-Stage에서 PartialEmbedding/PartialLMHead로 훈련된 커스텀 토큰 가중치를
+    Embedding Alignment에서 PartialEmbedding/PartialLMHead로 훈련된 커스텀 토큰 가중치를
     표준 embed_tokens.weight / lm_head.weight에 직접 복사한다.
     LoRA 없이 순수 base model + 커스텀 토큰만 포함한 상태를 반환한다.
     이후 PeftModel.from_pretrained()이 adapter_config.json을 읽어 LoRA 구조를 복원한다.
@@ -75,7 +75,7 @@ def _load_base_with_partial_state(
     model.resize_token_embeddings(len(tokenizer))
     logger.info("Hub 모델 로드 및 vocab 확장 완료: %s", cfg.model.hub_id)
 
-    # partial_state.pt: pre-stage에서 PartialEmbedding/PartialLMHead로 훈련된
+    # partial_state.pt: embed-align에서 PartialEmbedding/PartialLMHead로 훈련된
     # 커스텀 토큰 행만 저장한 파일. new_token_ids 인덱스 위치에 직접 주입한다.
     partial_state = torch.load(partial_state_path, map_location="cpu", weights_only=True)
     new_token_ids = partial_state["new_token_ids"]
@@ -149,7 +149,7 @@ def _load_adapters_mode(
         - 이후 adapter: model.load_adapter()로 추가 로드
 
     Args:
-        cfg: Hydra DictConfig. cfg.model.hub_id, cfg.model.pre_stage_dir,
+        cfg: Hydra DictConfig. cfg.model.hub_id, cfg.model.embed_align_dir,
              cfg.inference.adapters 섹션을 참조한다.
 
     Returns:
@@ -157,8 +157,8 @@ def _load_adapters_mode(
             - model: adapter 체인이 적용된 AutoModelForCausalLM 또는 PeftModel
             - tokenizer: 커스텀 토큰이 포함된 AutoTokenizer
     """
-    pre_stage_dir = Path(cfg.model.pre_stage_dir)
-    partial_state_path = pre_stage_dir / "partial_state.pt"
+    embed_align_dir = Path(cfg.model.embed_align_dir)
+    partial_state_path = embed_align_dir / "partial_state.pt"
 
     if not partial_state_path.exists():
         raise FileNotFoundError(f"partial_state.pt를 찾을 수 없음: {partial_state_path}")

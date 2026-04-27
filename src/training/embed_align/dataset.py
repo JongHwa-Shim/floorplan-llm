@@ -1,4 +1,4 @@
-"""Pre-Stage 훈련용 PyTorch Dataset 모듈.
+"""Embedding Alignment 훈련용 PyTorch Dataset 모듈.
 
 Arrow 데이터셋에서 샘플을 로드하고, 증강 파이프라인을 적용한 뒤
 Chat Template으로 감싸 input_ids / labels / attention_mask를 반환한다.
@@ -31,8 +31,8 @@ SYSTEM_PROMPT = (
 )
 
 
-class PreStageDataset(Dataset):
-    """Pre-Stage 훈련용 Dataset.
+class EmbedAlignDataset(Dataset):
+    """Embedding Alignment 훈련용 Dataset.
 
     Arrow 포맷의 평면도 데이터셋을 읽어 증강 파이프라인을 적용하고,
     chat template으로 감싼 입력/레이블 텐서를 반환한다.

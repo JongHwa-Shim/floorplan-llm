@@ -1,4 +1,4 @@
-"""Pre-Stage 훈련용 DataCollator 모듈.
+"""Embedding Alignment 훈련용 DataCollator 모듈.
 
 가변 길이 시퀀스를 배치 내 최대 길이로 dynamic padding하고,
 labels의 padding 부분은 -100으로 마스킹한다.
@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class PreStageCollator:
-    """Pre-Stage 훈련용 DataCollator.
+class EmbedAlignCollator:
+    """Embedding Alignment 훈련용 DataCollator.
 
     Dataset에서 반환된 샘플들을 배치로 묶는다.
     배치 내 최대 시퀀스 길이로 right-padding을 수행하며,
