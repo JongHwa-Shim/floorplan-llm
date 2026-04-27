@@ -282,7 +282,7 @@ Chat template으로 구성된 전체 시퀀스에서 **system + user 턴(입력)
 └──────────────────────────┬───────────────────────────┘
                            ▼
 ┌──────────────────────────────────────────────────────┐
-│  Step 5: LLM 3-Stage Fine-tuning: SFT → DPO → GRPO   │
+│  Step 5: LLM Fine-tuning: SFT → DPO → GRPO(GDPO)      │
 │  condition + output 토큰 → 평면도 생성 모델            │
 └──────────────────────────┬───────────────────────────┘
                            ▼
@@ -300,7 +300,8 @@ Chat template으로 구성된 전체 시퀀스에서 **system + user 턴(입력)
 | 4 | 증강 + 토크나이징 | Arrow + 증강 설정 | (condition_tokens, output_tokens) |
 | Pre-Stage | 새 토큰 Embedding 워밍업 | 토큰 시퀀스 배치 | 워밍업된 embed_tokens + lm_head |
 | SFT | LoRA Fine-tuning | HF Hub base model + `partial_state.pt` + 토큰 시퀀스 배치 | LoRA adapter Fine-tuned 모델 |
-| 5 | DPO → GRPO (예정) | 토큰 시퀀스 배치 | Fine-tuned 모델 |
+| GRPO | GDPO 강화학습 | HF Hub base + `partial_state.pt` + SFT adapter + 프롬프트 배치 | RL LoRA adapter |
+| DPO | Direct Preference Optimization (예정) | 선호/비선호 쌍 | Fine-tuned 모델 |
 | 6 | 추론 + 시각화 | 조건 입력 (JSONL/Arrow/txt) | 평면도 JSON + 토큰 텍스트 + 이미지 |
 
 ---
@@ -823,7 +824,7 @@ data/models/{model.name}/checkpoints/sft/{run_name}/
 
 | 파일 | 역할 |
 |------|------|
-| `src/training/sft/model_loader.py` | HF Hub base model 로드 + `partial_state.pt` 커스텀 토큰 가중치 주입 + LoRA 적용 |
+| `src/training/sft/model_loader.py` | HF Hub base model 로드 + `partial_state.pt` 커스텀 토큰 가중치 주입 + LoRA 적용. `load_base_model_with_partial_state()`, `build_lora_config()` 공개 API 제공 (RL에서 재사용) |
 | `src/training/sft/trainer.py` | `TrainingArguments` + 표준 `Trainer` 빌드 (패치 불필요) |
 | `scripts/training/run_sft.py` | Hydra 진입점, seed 고정, Resume 분기, 훈련 후 adapter + optimizer 저장 |
 | `config/training/sft/pipeline.yaml` | LoRA, 학습률, model_dir 등 SFT 전체 설정 |
@@ -861,9 +862,143 @@ uv run python scripts/training/run_sft.py
 
 선호/비선호 쌍(preferred/rejected)을 활용하여 생성 품질을 개선한다. 기하학적 제약(방 겹침, 경계 초과 등)을 위반하는 출력을 rejected 샘플로 구성.
 
-### Stage 3: GRPO (Group Relative Policy Optimization) — 구현 예정
+---
 
-RLVR 기반 강화학습으로 규칙 기반 보상 함수를 적용한다. 방 블록 간 겹침 없음, 좌표 경계 준수, 사용자 조건 부합도 등을 보상으로 사용하여 생성 정밀도를 극대화한다.
+### Stage 3: GRPO (GDPO) — 완료
+
+#### 목적
+
+RLVR(Reinforcement Learning from Verifiable Rewards) 기반 강화학습으로 규칙 기반 보상함수 7개를 적용한다. SFT로 평면도 생성 형식을 학습한 모델이 직교성·겹침 없음·연결성 등 기하학적 정확도를 스스로 높이도록 RL fine-tuning한다.
+
+TRL의 `GRPOTrainer`를 서브클래싱한 `RLTrainer`가 GDPO(보상별 독립 정규화) + 토큰 수준 신용할당을 구현한다.
+
+#### 멀티어댑터 모델 구조
+
+```
+HF Hub NF4 base + partial_state.pt 주입
+    ↓
+PeftModel.from_pretrained(sft_adapter_dir, adapter_name="sft", is_trainable=False)
+    ↓
+model.add_adapter("rl", lora_config)           # trainable
+    ↓
+model.base_model.set_adapter(["sft", "rl"])    # 두 어댑터 동시 활성화
+SFT params: requires_grad=False (재동결)
+RL params: requires_grad=True
+```
+
+- SFT adapter는 frozen base model 역할. 파라미터 갱신 없음.
+- RL adapter만 gradient 흐름 (lora_A, lora_B).
+- 두 adapter를 동시에 활성화하여 SFT 품질을 유지하면서 RL 정책을 학습.
+
+#### GDPO 알고리즘
+
+표준 GRPO와 달리 보상함수별로 독립 정규화(z-score)를 수행한 뒤 가중합으로 결합한다.
+
+**1. 그룹별 보상 정규화 (프롬프트당 G개 completion 기준)**
+
+$$A_k^{(i)} = \frac{r_k^{(i)} - \mathbb{E}[r_k]}{\sqrt{\text{Var}(r_k)} + \epsilon}$$
+
+**2. 가중합 결합 (K=7개 보상)**
+
+$$A^{(i)} = \sum_{k=1}^{K} w_k \cdot A_k^{(i)}$$
+
+**3. 하드 게이트 (R_format=0이면 전체 보상 0)**
+
+포맷 파싱 실패 시 geometry/connectivity 보상이 의미 없으므로 강제 0.
+
+**4. 토큰 수준 신용할당 (적용 대상: format, orthogonality, no_overlap)**
+
+$$a_t = A \cdot (1 - m_t) - |A| \cdot \lambda \cdot m_t$$
+
+- $m_t$: 오류 토큰 마스크 (파싱 실패 위치, 직각 위반 꼭지점, 겹침 발생 방 토큰)
+- 정상 토큰: 어드밴티지 $A$ 그대로. 오류 토큰: 방향 페널티 추가.
+
+**5. 배치 정규화 (시퀀스 대표값 기반)**
+
+#### 7개 보상함수
+
+| 이름 | 산출 방식 | 토큰 신용할당 | 가중치 | 하드 게이트 |
+|------|---------|------------|--------|-----------|
+| `R_format` | 파싱 성공 여부 이진값 | ✅ (오류 위치 마스킹) | 1.0 | ✅ (0이면 모두 0) |
+| `R_count_total` | 방 전체 개수 일치 이진값 | ❌ | 0.5 | - |
+| `R_count_type` | 타입별 개수 정확도 연속값 | ❌ | 1.0 | - |
+| `R_orthogonality` | 꼭지점 직각 비율 | ✅ (위반 꼭지점 마스킹) | 1.5 | - |
+| `R_no_overlap` | 겹침 없음 (Shapely) | ✅ (겹친 방 토큰 마스킹) | 2.0 | - |
+| `R_connectivity` | 문 연결관계 (헝가리안 매칭) | ❌ | 1.0 | - |
+| `R_spatial` | 8방위 공간관계 정확도 | ❌ | 0.5 | - |
+
+#### vLLM Colocate 통합
+
+**아키텍처 (RTX 3090×2, DDP 2-GPU):**
+
+```
+GPU 0 (rank 0)                        GPU 1 (rank 1)
+┌─────────────────────┐               ┌─────────────────────┐
+│ 훈련 모델 (NF4+LoRA)  │               │ 훈련 모델 (NF4+LoRA)  │
+│ vLLM 인스턴스 (NF4)   │               │ vLLM 인스턴스 (NF4)   │
+│   → local batch      │               │   → local batch      │
+│      rollout 생성    │               │      rollout 생성    │
+└─────────────────────┘               └─────────────────────┘
+     ↕ DDP gradient sync
+```
+
+- **rollout 생성:** 두 GPU가 각자 local batch를 동시에 생성 (완전 병렬)
+- **가중치 동기화:** step마다 `merge_adapter()` → `llm.load_weights()` (in-process 메모리 복사) → `unmerge_adapter()`
+- **`gpu_memory_utilization=0.45`:** RTX 3090 24GB 기준. 24×0.45=10.8GB를 vLLM KV cache에 할당
+
+**VRAM 레이아웃 (GPU당, RTX 3090 24GB):**
+```
+NF4 훈련 모델          ~4 GB
+vLLM NF4 모델         ~4 GB  ┐
+vLLM KV cache         ~6 GB  ┘ gpu_memory_utilization=0.45 → 10.8GB 할당
+optimizer (paged)     ~0.5GB
+gradient checkpoint   ~3 GB
+여유                  ~6 GB
+────────────────────────────
+합계                  ~23.5GB
+```
+
+**HF generate 모드 (디버그용):**
+`rl.use_vllm=false`로 전환 시 vLLM 없이 `model.generate()`로 rollout 생성. VRAM 절약. 단, 512 토큰 이하 시퀀스에서는 HF generate가 더 빠름 (vLLM `merge_adapter` + `sync_weights` 오버헤드 5–10초/step 대비 이점 없음).
+
+#### 구현 노트 (핵심 버그 이력)
+
+1. **`PeftModel.name_or_path` 우회:** TRL이 `model.name_or_path`로 vLLM을 초기화하는데, PeftModel에서 `nn.Module.__getattribute__`가 instance `__dict__`를 우선하여 Hub ID를 반환한다. `model.config.name_or_path` 설정만으로는 반영 안 됨. `model.base_model.model.name_or_path = vllm_base_dir`도 함께 설정해야 함.
+
+2. **vLLM `stop_token_ids` vs HF `eos_token_id`:** vLLM `SamplingParams`는 `stop_token_ids` 키를 사용. 단, 151643(`<|endoftext|>`)은 `vllm_base/config.json`의 `eos_token_id`로 자동 처리되므로 `stop_token_ids`에 포함 금지 — 포함 시 vLLM이 출력에서 해당 토큰을 제거하여 TRL의 `clipped_ratio=1` 오진단 발생. 커스텀 종료 토큰(152214)만 등록.
+
+3. **vllm_base NF4 역양자화:** `save_pretrained()`는 bitsandbytes NF4 포맷으로 저장 → vLLM이 로드 불가. `prepare_vllm_base_model()`에서 Params4bit → bf16 역양자화 후 safetensors로 직접 저장. `.base_layer.` 이름 제거, `lora_` 파라미터 제외.
+
+#### 체크포인트 및 출력
+
+```
+data/models/{model.name}/checkpoints/rl/{run_name}/
+├── checkpoint-{step}/
+│   ├── adapter_model.safetensors  # RL LoRA adapter 가중치
+│   ├── adapter_config.json        # use_dora: false
+│   ├── optimizer.pt
+│   └── trainer_state.json
+└── final/
+    ├── adapter_model.safetensors
+    ├── adapter_config.json
+    ├── optimizer.pt
+    ├── scheduler.pt
+    └── trainer_state.json
+```
+
+#### 주요 모듈
+
+| 파일 | 역할 |
+|------|------|
+| `src/training/rl/model_loader.py` | HF Hub NF4 + partial_state.pt + SFT(frozen)+RL(trainable) 멀티어댑터 구성 + vllm_base bf16 저장 |
+| `src/training/rl/trainer.py` | `RLTrainer` (GRPOTrainer 서브클래스) — GDPO + 토큰 신용할당 |
+| `src/training/rl/advantage.py` | `gdpo_group_normalize()`, `compute_token_advantages()`, `_batch_normalize()` |
+| `src/training/rl/dataset.py` | `RLPromptDataset` — 프롬프트+metadata만 로드 (출력 label 없음) |
+| `src/training/rl/rewards/__init__.py` | `compute_all_rewards()` 공개 API |
+| `src/training/rl/rewards/*.py` | 7개 규칙 기반 보상함수 (parser, format, geometry, connectivity, count, spatial, credit_assignment) |
+| `scripts/training/run_rl.py` | Hydra 진입점, seed 고정, DDP 자동 전환, vllm_base 준비 |
+| `config/training/rl/pipeline.yaml` | GDPO, 보상함수, vLLM colocate, DDP 전체 설정 |
+| `tests/training/rl/validate_rl.py` | 4단계 통합 검증 (파일 존재·어댑터 구조·훈련 갱신·보상+생성) |
 
 ### 학습 데이터 구성 (공통)
 

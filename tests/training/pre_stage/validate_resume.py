@@ -114,7 +114,8 @@ def validate_partial_state(checkpoint_dir: Path) -> bool:
     mock_embed.new_embed.data.copy_(new_embed)
     restored_values = mock_embed.new_embed.data
 
-    if not torch.allclose(restored_values, new_embed):
+    # float32 버퍼에 bfloat16 복사 후 비교 시 dtype 통일 필요
+    if not torch.allclose(restored_values, new_embed.float()):
         logger.error("[FAIL] partial_state 복원 후 값 불일치")
         return False
     logger.info("[PASS] partial_state 모의 복원 성공 (값 일치)")

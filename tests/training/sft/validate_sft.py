@@ -244,27 +244,30 @@ def phase0_file_existence(model_dir: str) -> bool:
     model_path = Path(model_dir)
     passed = True
 
-    # 필수 파일 목록 (partial_state.pt 방식: model.safetensors 없음)
-    required_files = [
-        "partial_state.pt",
-        "tokenizer.json",
-        "tokenizer_config.json",
-    ]
-    for fname in required_files:
-        fpath = model_path / fname
+    # partial_state.pt: model_dir에 위치
+    pt_path = model_path / "partial_state.pt"
+    if pt_path.exists():
+        logger.info(f"[PASS] partial_state.pt 존재")
+    else:
+        logger.error(f"[FAIL] partial_state.pt 없음: {pt_path}")
+        passed = False
+
+    # tokenizer 파일과 vocab_extension.json은 tokenizer_dir(tokenization/)에 위치
+    # model_dir(checkpoints/pre_stage/final/)이 아님
+    cfg_tmp = OmegaConf.load(
+        Path(_PROJECT_ROOT) / "config" / "training" / "sft" / "pipeline.yaml"
+    )
+    tokenizer_dir = Path(_PROJECT_ROOT) / cfg_tmp.model.tokenizer_dir
+    vocab_ext_path = Path(_PROJECT_ROOT) / cfg_tmp.model.vocab_extension
+
+    for fname in ["tokenizer.json", "tokenizer_config.json"]:
+        fpath = tokenizer_dir / fname
         if fpath.exists():
             logger.info(f"[PASS] {fname} 존재")
         else:
             logger.error(f"[FAIL] {fname} 없음: {fpath}")
             passed = False
 
-    # vocab_extension.json: pre_stage/final이 아닌 tokenization/ 경로
-    cfg_tmp = OmegaConf.load(
-        Path(_PROJECT_ROOT) / "config" / "training" / "sft" / "pipeline.yaml"
-    )
-    vocab_ext_path = Path(_PROJECT_ROOT) / OmegaConf.to_container(cfg_tmp, resolve=False)[
-        "model"
-    ]["vocab_extension"].replace("${model.name}", cfg_tmp.model.name)
     if vocab_ext_path.exists():
         logger.info(f"[PASS] vocab_extension.json 존재: {vocab_ext_path}")
     else:

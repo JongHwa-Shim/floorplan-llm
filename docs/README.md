@@ -44,8 +44,10 @@ floorplan-llm/
 │   │   │       └── augmentation.yaml   # 검증에 사용할 증강 파라미터
 │   │   ├── pre_stage/              # Pre-Stage 훈련 설정
 │   │   │   └── pipeline.yaml       # defaults로 training/augmentation: pre_stage 합성
-│   │   └── sft/                    # SFT 훈련 설정
-│   │       └── pipeline.yaml       # LoRA, 학습률, hub_id/model_dir (final_checkpoints/pre_stage) 등
+│   │   ├── sft/                    # SFT 훈련 설정
+│   │   │   └── pipeline.yaml       # LoRA, 학습률, hub_id/model_dir (final_checkpoints/pre_stage) 등
+│   │   └── rl/                     # RL(GRPO) 훈련 설정
+│   │       └── pipeline.yaml       # GDPO, 보상함수, vLLM colocate, DDP 설정
 │   └── inference/                  # 추론 설정
 │       └── pipeline.yaml           # 모델 로드 모드, 입력 소스, 생성 파라미터, 출력 설정
 │
@@ -81,9 +83,24 @@ floorplan-llm/
 │   │   │   ├── dataset.py          # Arrow 로드 + 증강 + Chat Template
 │   │   │   ├── collator.py         # Dynamic padding + label 마스킹
 │   │   │   └── trainer.py          # TrainingArguments + Trainer 빌드
-│   │   └── sft/                    # SFT 훈련 모듈
-│   │       ├── model_loader.py     # HF Hub base model + partial_state.pt 가중치 주입 + LoRA 적용
-│   │       └── trainer.py          # TrainingArguments + 표준 Trainer 빌드
+│   │   ├── sft/                    # SFT 훈련 모듈
+│   │   │   ├── model_loader.py     # HF Hub base model + partial_state.pt 주입 + LoRA 적용 (공개 API: load_base_model_with_partial_state, build_lora_config)
+│   │   │   └── trainer.py          # TrainingArguments + 표준 Trainer 빌드
+│   │   └── rl/                     # RL(GRPO) 훈련 모듈
+│   │       ├── __init__.py
+│   │       ├── model_loader.py     # SFT(frozen) + RL(trainable) 멀티어댑터 구성 + vllm_base bf16 저장
+│   │       ├── dataset.py          # RLPromptDataset (prompt+metadata만, 출력 label 없음)
+│   │       ├── advantage.py        # GDPO 정규화 + 토큰 신용할당 + 배치 정규화
+│   │       ├── trainer.py          # RLTrainer (GRPOTrainer 서브클래스)
+│   │       └── rewards/            # 7개 규칙 기반 보상함수
+│   │           ├── __init__.py     # compute_all_rewards 공개 API
+│   │           ├── parser.py       # 생성 토큰 파싱
+│   │           ├── format_reward.py
+│   │           ├── geometry_reward.py
+│   │           ├── connectivity_reward.py
+│   │           ├── count_reward.py
+│   │           ├── spatial_reward.py
+│   │           └── credit_assignment.py  # 토큰 수준 신용할당
 │   ├── inference/                  # 추론 모듈
 │   │   ├── model_loader.py         # Hub NF4 + partial_state.pt 주입 + LoRA adapter 스태킹
 │   │   ├── condition_builder.py    # 입력 소스별 샘플 로드 + 증강 적용 + condition 토큰 빌드
@@ -106,7 +123,8 @@ floorplan-llm/
 │   │   ├── augmentation/
 │   │   │   └── validate_augmentation.py # 증강 결과 검증
 │   │   ├── run_pre_stage.py        # Pre-Stage 훈련 실행
-│   │   └── run_sft.py              # SFT 훈련 실행 (HF Hub + partial_state.pt + LoRA adapter 저장)
+│   │   ├── run_sft.py              # SFT 훈련 실행 (HF Hub + partial_state.pt + LoRA adapter 저장)
+│   │   └── run_rl.py               # RL(GRPO) 훈련 실행 (vLLM colocate + DDP 자동 전환)
 │   ├── inference/
 │   │   └── run_inference.py        # 추론 실행 (입력 소스 선택, 다중 출력, 결과 저장)
 │   └── utils/
@@ -121,8 +139,11 @@ floorplan-llm/
 │   │   ├── pre_stage/
 │   │   │   ├── validate_resume.py          # Resume 체크포인트 복원 검증
 │   │   │   └── validate_save_and_load.py   # 저장/로드 후 optimizer 업데이트 정상 동작 검증
-│   │   └── sft/
-│   │       └── validate_sft.py             # SFT 통합 검증 (로드·LoRA구조·훈련·저장·Resume)
+│   │   ├── sft/
+│   │   │   └── validate_sft.py             # SFT 통합 검증 (로드·LoRA구조·훈련·저장·Resume)
+│   │   └── rl/
+│   │       ├── __init__.py
+│   │       └── validate_rl.py              # RL 통합 검증 (파일존재·어댑터구조·훈련갱신·보상+생성)
 │   ├── inference/
 │   │   └── validate_inference.py           # 추론 통합 검증 (import·모델 로드·토큰 생성·파싱)
 │   └── utils/
@@ -146,10 +167,14 @@ floorplan-llm/
 │               │   └── {run_name}/             # run_name별 독립 저장 (기본: floorplan-pre-stage)
 │               │       ├── checkpoint-*/       # 에폭별 자동 저장 체크포인트
 │               │       └── final/              # 훈련 run 최종 체크포인트 (partial_state.pt)
-│               └── sft/                        # SFT 훈련 run 체크포인트
-│                   └── {run_name}/             # run_name별 독립 저장 (기본: floorplan-sft)
-│                       ├── checkpoint-*/       # 에폭별 자동 저장 (adapter_model.safetensors)
-│                       └── final/              # 훈련 run 최종 체크포인트 (adapter + optimizer)
+│               ├── sft/                        # SFT 훈련 run 체크포인트
+│               │   └── {run_name}/             # run_name별 독립 저장 (기본: floorplan-sft)
+│               │       ├── checkpoint-*/       # 에폭별 자동 저장 (adapter_model.safetensors)
+│               │       └── final/              # 훈련 run 최종 체크포인트 (adapter + optimizer)
+│               └── rl/                         # RL(GRPO) 훈련 run 체크포인트
+│                   └── {run_name}/             # run_name별 독립 저장 (기본: floorplan-rl)
+│                       ├── checkpoint-*/       # step별 자동 저장 (adapter_model.safetensors)
+│                       └── final/              # 훈련 run 최종 체크포인트 (RL adapter + optimizer)
 │
 ├── outputs/                        # Hydra 실행 로그 + 추론 결과
 │   ├── training/
@@ -246,13 +271,13 @@ PNG (RPLAN 데이터셋)
 [SFT] LoRA Fine-tuning         → attention/MLP 전 레이어 학습
         │
         ▼
-[Step 5] DPO → GRPO (구현 예정) → 평면도 생성 모델
+[Step 5] GRPO (GDPO) 강화학습 → 평면도 생성 모델
         │
         ▼
 [Step 6] 추론 + 시각화 → 평면도 이미지
 ```
 
-> **현재 구현 완료 범위:** Step 1 ~ Step 4, Pre-Stage, SFT, Step 6 (추론)
+> **현재 구현 완료 범위:** Step 1 ~ Step 4, Pre-Stage, SFT, GRPO(GDPO), Step 6 (추론)
 
 ---
 
@@ -581,6 +606,70 @@ uv run python tests/training/sft/validate_sft.py \
 
 ---
 
+### RL (GRPO): GDPO 강화학습
+
+HF Hub base model + partial_state.pt + SFT adapter(frozen) + RL adapter(trainable) 멀티어댑터 구조로 GDPO + 토큰 수준 신용할당 강화학습을 수행한다. vLLM colocate 모드로 각 DDP rank 내에서 병렬 rollout을 생성한다.
+
+```bash
+# DDP 2-GPU (기본: vLLM colocate 모드)
+uv run torchrun --nproc_per_node=2 scripts/training/run_rl.py
+
+# 단일 GPU
+uv run python scripts/training/run_rl.py
+
+# 디버그 (10 step, vLLM 비활성화 → HF generate 사용, W&B 비활성화)
+uv run python scripts/training/run_rl.py \
+    training.max_steps=10 training.report_to=none \
+    rl.use_vllm=false
+
+# 신용할당 비활성화 (균등 broadcast 모드)
+uv run python scripts/training/run_rl.py \
+    advantage.use_token_credit_assignment=false
+
+# W&B 비활성화
+uv run python scripts/training/run_rl.py training.report_to=none
+```
+
+**RL 체크포인트 출력 구조:**
+```
+data/models/{model.name}/checkpoints/rl/{run_name}/
+├── checkpoint-{step}/
+│   ├── adapter_model.safetensors  # RL LoRA adapter 가중치
+│   ├── adapter_config.json
+│   ├── optimizer.pt
+│   └── trainer_state.json
+└── final/
+    ├── adapter_model.safetensors
+    ├── adapter_config.json
+    ├── optimizer.pt
+    ├── scheduler.pt
+    └── trainer_state.json
+```
+
+---
+
+### RL 검증: 통합 검증 스크립트
+
+모델 로드, 어댑터 구조, 훈련 파라미터 갱신, 보상함수, vLLM/HF 생성을 4단계로 통합 검증한다.
+
+**검증 단계:**
+- **Phase 0:** 파일 존재 확인 (partial_state.pt, SFT adapter, tokenizer, vocab_extension)
+- **Phase 1:** 모델 로드 + vocab_size 일치 + 멀티어댑터 구조 확인 (sft frozen, rl trainable)
+- **Phase 2:** N step 훈련 전후 rl 파라미터 갱신 + sft 파라미터 불변 확인
+- **Phase 3:** 보상함수 7개 계산 + vLLM 또는 HF generate 통합 생성 검증
+
+```bash
+# HF generate 모드 (vLLM 없이)
+uv run python tests/training/rl/validate_rl.py
+
+# vLLM colocate 모드
+uv run python tests/training/rl/validate_rl.py --use_vllm
+```
+
+> 모든 Phase가 `[PASS]`가 출력되어야 정상.
+
+---
+
 ### Pre-Stage 검증: Resume 체크포인트 확인
 
 체크포인트의 `partial_state.pt`가 올바르게 저장되어 있는지, Resume 시 new_embed/new_lm_head 복원이 가능한지 확인한다.
@@ -685,6 +774,25 @@ model:
 | `drop.p_drop_spatial` | `0.80` | Spatial 관계 삭제 확률 |
 | `room_summary.p_drop_total` | `0.50` | `<TOTAL>` + 숫자 쌍 삭제 확률 |
 | `room_summary.p_drop_type` | `0.60` | 개별 타입별 `<COUNT>` + 숫자 쌍 삭제 확률 |
+
+### `config/training/rl/pipeline.yaml`
+
+| 파라미터 | 기본값 | 설명 |
+|---------|--------|------|
+| `model.sft_adapter_dir` | `data/models/.../checkpoints/sft/final` | SFT adapter 경로 (frozen으로 사용) |
+| `rl.use_vllm` | `true` | vLLM colocate 모드 활성화 |
+| `rl.vllm_mode` | `"colocate"` | `"colocate"` (DDP 각 rank 내장) \| `"server"` (별도 GPU) |
+| `rl.vllm_gpu_memory_utilization` | `0.45` | vLLM KV cache 비율 (24GB 기준, OOM 시 0.4로 낮춤) |
+| `rl.num_generations` | `4` | 프롬프트당 rollout 생성 수 (G) |
+| `rl.temperature` | `0.7` | 생성 온도 |
+| `rl.kl_coeff` | `0.05` | KL 페널티 계수 (β) |
+| `rl.clip_range` | `0.2` | PPO 클리핑 엡실론 |
+| `advantage.use_token_credit_assignment` | `true` | 토큰 수준 신용할당 전역 토글 |
+| `rewards.format.hard_gate` | `true` | R_format=0이면 모든 보상 0으로 강제 |
+| `rewards.no_overlap.weight` | `2.0` | 최고 가중치 보상 (겹침 없음) |
+| `training.learning_rate` | `5e-6` | RL adapter 학습률 |
+| `training.optim` | `"paged_adamw_32bit"` | GPU OOM 방지 (momentum을 CPU RAM에 페이징) |
+| `data.max_completion_length` | `512` | 최대 completion 토큰 수 |
 
 ### `config/training/sft/pipeline.yaml`
 
@@ -815,7 +923,8 @@ You are a floor plan generator. Given room conditions, generate complete floorpl
 | Step 4 | 데이터 증강 + 토크나이징 | ✅ 완료 |
 | Pre-Stage | 새 토큰 Embedding 워밍업 훈련 | ✅ 완료 |
 | SFT | LoRA Fine-tuning (attention/MLP 전 레이어) | ✅ 완료 |
-| Step 5 | DPO → GRPO Fine-tuning | 🔜 구현 예정 |
+| Stage 2 | DPO Fine-tuning | 🔜 구현 예정 |
+| Stage 3 | GRPO (GDPO) 강화학습 + vllm colocate | ✅ 완료 |
 | Step 6 | 추론 + 시각화 (adapters/merged 모드, 4개 입력 소스) | ✅ 완료 |
 
 자세한 설계 내용은 [Docs.md](Docs.md)를 참고.

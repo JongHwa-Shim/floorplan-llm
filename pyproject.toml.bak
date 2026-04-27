@@ -21,21 +21,21 @@ dependencies = [
     "accelerate>=1.6.0",
     "wandb>=0.19.0",
     # RL(GRPO) 훈련 의존성
+    # vllm은 torch/CUDA 버전 의존성이 복잡하여 별도 설치 필요:
+    #   pip install vllm  (CUDA 버전에 맞는 빌드 직접 선택)
     "trl>=0.29.0",
     "shapely>=2.0.0",
     "scipy>=1.14.0",
-    "vllm>=0.19.0",
 ]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["src*"]
 
-# numba 0.61.2가 numpy<2.3을 요구하지만, 실제 런타임에서 numpy 2.x와 호환됨
-# uv 해결 충돌 우회를 위해 numba의 numpy 상한 제약을 override
-# numba, mistral-common 등 vllm 의존성이 numpy<2.4 를 요구하나
-# 실제로 numpy 2.x와 런타임 호환됨 — uv 해결 충돌만 우회
-[tool.uv]
-override-dependencies = [
-    "numpy>=2.4.2",
-]
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
