@@ -73,7 +73,8 @@ training:
   project_name: "floorplan-llm"
   run_name: "floorplan-sft"
   seed: 42
-  save_total_limit: 3
+  # 체크포인트 최대 보존 수 (null = 제한 없이 전체 보존)
+  save_total_limit: null
   load_best_model_at_end: true
   max_steps: 0                        # 0 = 전체 epoch 기반 학습
   output_dir: "data/models/${model.name}/checkpoints/sft/${training.run_name}"
