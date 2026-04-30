@@ -47,8 +47,13 @@ def compute_format_reward(
     if not parsed.success or parsed.level < 3:
         return 0.0, parsed.error_indices
 
-    # 최소 outline + 1개 방 필요
-    if len(parsed.rooms) < 2:
+    # 최소 outline + 1개 방 필요. outline은 항상 첫 번째 ROOM 블록으로 명시.
+    # parser는 outline 위치를 강제하지 않으므로, 여기서 outline 부재/잘못된 위치를 모두 검출한다.
+    if (
+        len(parsed.rooms) < 2
+        or parsed.rooms[0].room_type != "outline"
+        or any(r.room_type == "outline" for r in parsed.rooms[1:])
+    ):
         all_room_indices = _collect_room_token_indices(parsed)
         return 0.0, all_room_indices
 

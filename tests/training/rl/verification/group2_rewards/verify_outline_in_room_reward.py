@@ -119,22 +119,45 @@ def build_cases() -> list[Case]:
             expected_reward=1.0,
             expected_error_vertices=[],
         ),
-        Case(
-            "no_outline_returns_one",
-            "outline 없음 → 1.0 (채점 비활성)",
-            rooms=[
-                RoomSpec("bedroom", [(20, 20), (100, 20), (100, 100), (20, 100)]),
-                RoomSpec("kitchen", [(120, 120), (180, 120), (180, 180), (120, 180)]),
-            ],
-            expected_reward=1.0,
-            expected_error_vertices=[],
-        ),
     ]
+
+
+def case_no_outline_direct_call():
+    """outline 없는 ParsedFloorplan을 직접 만들어 함수 자체의 동작 검증.
+
+    compute_all_rewards()를 우회 — F-2 수정 후 outline 부재는 format hard gate에서
+    막혀 다른 보상이 모두 0으로 강제된다. 여기서는 outline_in_room 함수 자체가
+    "outline 없으면 1.0 반환 (채점 비활성)" 동작을 하는지 격리 검증.
+    """
+    from src.training.rl.rewards.outline_in_room_reward import (
+        compute_outline_in_room_reward,
+    )
+    from src.training.rl.rewards.parser import ParsedRoom, ParsedFloorplan
+
+    parsed = ParsedFloorplan(
+        success=True, level=3, front_door=None,
+        rooms=[
+            ParsedRoom("bedroom", [(20, 20), (100, 20), (100, 100), (20, 100)],
+                      coord_token_indices=[10, 12, 14, 16],
+                      block_start=0, block_end=20),
+            ParsedRoom("kitchen", [(120, 120), (180, 120), (180, 180), (120, 180)],
+                      coord_token_indices=[30, 32, 34, 36],
+                      block_start=22, block_end=42),
+        ],
+        doors=[], error_indices=[],
+    )
+    reward, errors = compute_outline_in_room_reward(parsed)
+    assert reward == 1.0, f"outline 없으면 1.0 반환해야 함: {reward}"
+    assert errors == [], f"errors=[] 기대: {errors}"
 
 
 def main():
     cases = build_cases()
     results = run_cases(cases, runner, label=f"Group 2: R_{REWARD_NAME}")
+    # 추가 격리 검증 (compute_all_rewards 우회)
+    print("\n[추가] outline 없는 ParsedFloorplan 직접 호출:")
+    case_no_outline_direct_call()
+    print("[PASS] outline 없을 때 1.0 반환 (채점 비활성)")
     summary_and_exit(results, label=f"R_{REWARD_NAME}")
 
 

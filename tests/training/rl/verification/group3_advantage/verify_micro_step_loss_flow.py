@@ -192,8 +192,10 @@ def _check_caches(trainer) -> None:
 
     # _reward_names가 활성화된 보상명 리스트 (trainer.py:168-172)
     print(f"    [INFO] _reward_names ({len(trainer._reward_names)}개): {trainer._reward_names}")
-    if "outline_in_room" not in trainer._reward_names:
-        print("    ★ FINDING [B-14 확인]: 실제 trainer에서도 outline_in_room이 _reward_names에 없음")
+    # F-1 회귀 가드: outline_in_room이 _reward_names에 포함되어야 함
+    assert "outline_in_room" in trainer._reward_names, \
+        "★ F-1 회귀: outline_in_room이 _reward_names에 없음 (trainer.reward_order 누락)"
+    print("    [PASS] outline_in_room이 _reward_names에 포함됨 (F-1 회귀 가드)")
 
 
 def _check_adapter_gradients(trainer) -> None:

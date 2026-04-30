@@ -141,14 +141,23 @@ def build_cases() -> list[Case]:
         ),
         Case(
             "no_outline_two_rooms",
-            "★ outline 없이 방 2개만 — format이 통과시키는지 검출 (의도 대비 결함)",
+            "★ outline 없이 방 2개만 → 0.0 (F-2 수정 후 outline 부재 검증 추가됨)",
             rooms=[
                 RoomSpec("bedroom", [(20, 20), (100, 20), (100, 100), (20, 100)]),
                 RoomSpec("kitchen", [(120, 20), (200, 20), (200, 100), (120, 100)]),
             ],
             front_door=fd_ok, metadata=metadata, cfg=cfg_format,
-            expected_reward=1.0,  # 현재 구현은 통과시킴 — 회귀 가드 + finding
-            expected_findings="format이 'outline 미존재' 케이스를 통과시킴 (docstring 의도 위반)",
+            expected_reward=0.0,  # F-2 수정 후: outline이 첫 방으로 명시되어야만 통과
+        ),
+        Case(
+            "outline_not_first",
+            "★ outline이 첫 번째가 아닌 위치에 있음 → 0.0 (F-2 검증)",
+            rooms=[
+                RoomSpec("bedroom", [(20, 20), (100, 20), (100, 100), (20, 100)]),
+                RoomSpec("outline", [(10, 10), (200, 10), (200, 200), (10, 200)]),
+            ],
+            front_door=fd_ok, metadata=metadata, cfg=cfg_format,
+            expected_reward=0.0,
         ),
     ]
 
