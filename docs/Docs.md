@@ -1071,6 +1071,20 @@ gradient checkpoint   ~3 GB
 
 7. **`R_input_consistency` drop_type 방 확장:** 초기 구현은 앵커(type+coords 모두 visible)에만 채점했다. drop_type 방(coords visible, type="")도 좌표 힌트가 있으므로 "해당 위치에 방을 그렸는가"를 평가할 수 있다. 타입 그룹 분류가 불가하므로 앵커 헝가리안 완료 후 남은 출력 방들을 대상으로 타입 무관 헝가리안(`_match_drop_type_rooms()`)을 별도로 수행한다. 동시에 τ를 30px → 15px로 축소했다 (transform 증강은 입력/출력 좌표에 동일 적용되어 상대 오차가 없으므로 변형 잔차가 실질적 오차 요인이 아님을 확인; 실질 오차는 노이즈 3σ=9px + 모델 오차 마진).
 
+8. **`outline_in_room` 보상이 `RLTrainer.reward_order`에서 누락:** [`src/training/rl/trainer.py`](../src/training/rl/trainer.py)의 `_build_reward_funcs()`가 순회하는 `reward_order` 리스트에 `outline_in_room`이 빠져 있어 callable이 만들어지지 않았다. 결과적으로 `compute_all_rewards()`는 보상을 계산하지만 TRL `rewards_per_func` 행렬(K)에 반영되지 않고, `compute_token_advantages()` 가중합 루프도 `_reward_names`만 순회하므로 신용할당 mask까지 무시되어 새 보상이 학습 신호에서 weight=0으로 적용됐다. 11개 보상 모두 활성화되도록 `room_in_outline` 다음에 `outline_in_room`을 추가했다. 실제 1 micro-step에서 `_cached_rewards_per_func.shape == (B_total, 11)`로 확장되며 W&B에 `rewards/reward_outline_in_room/mean` 메트릭이 신규 등장한다.
+
+9. **`R_format`이 outline 부재/잘못된 위치를 통과시키는 결함:** parser는 `<ROOM>` 토큰을 만나는 순서대로 파싱할 뿐 첫 번째 방이 outline이라는 보장을 하지 않는다. 기존 `R_format`은 `len(parsed.rooms) < 2`만 검사했기 때문에 모델이 outline 없이 일반 방 두 개만 출력해도 1.0이 부여되어 hard gate가 우회됐다. 현재는 `parsed.rooms[0].room_type == "outline"`이고 `rooms[1:]`에 outline이 추가로 등장하지 않을 때만 1.0을 반환한다. 위반 시 모든 방 블록 토큰을 error로 마킹하여 신용할당까지 작동한다.
+
+10. **parser의 Y 토큰 누락 시 강제 진행 (무한 루프 가드):** `_parse_single_room()`은 `<X:n> <Y:m>` 쌍을 순서대로 파싱한다. X가 성공한 직후 Y가 아닌 토큰이 오면 이전 구현은 `continue`만 하여 `self.pos`가 이동하지 않았고, 그 자리가 또 X 토큰이면 다음 iter에서 같은 분기에 빠져 X 한 개씩 미아가 되며 진행하는 비정상 동작이 발생할 수 있었다. 현재는 `y is None` 분기에서 `self.pos += 1`로 한 토큰 강제 진행한다.
+
+11. **parser EOS 비교의 falsy 단락 버그:** `_parse_doors()`의 EOS 검사가 `self.ids[self.pos] == (self.vocab.eos_token_id or -9999)` 형태였다. Python `or`는 첫 truthy 값을 반환하므로 `eos_token_id`가 정수 0인 LLM에서는 `0 or -9999`가 `-9999`로 평가되어 EOS 비교가 영구적으로 false가 되는 잠재 결함이 있었다. `is not None` 명시 체크로 교체했다 (Qwen2.5는 EOS=151643이라 영향 없으나 다른 LLM에서 회귀 방지).
+
+12. **`R_connectivity`의 door 내부 위치 false positive 제거:** 이전 `_has_door_between()`은 자체 작성한 `_min_distance_to_polygon`으로 door 중심에서 폴리곤 경계까지의 최소 거리를 계산했는데, 점이 폴리곤 **내부**에 있어도 경계까지 거리만 반환하므로 door가 한 방 내부 깊숙이 있어도 dist가 작게 나와 통과되는 문제가 있었다. door는 두 방의 공유 벽 근처에 있어야 한다는 의도와 어긋남. shapely `polygon.boundary.distance(point)`로 교체하여 점이 내부에 있을수록 boundary까지 거리가 커져 자동으로 걸러진다. 미사용 헬퍼(`_min_distance_to_polygon`, `_point_to_segment_distance`)는 제거.
+
+13. **`R_spatial` 8방위 분기의 부등호 일관성:** `_vector_to_direction()`의 분기가 대부분 `low <= x < high` 형태인데 left 분기만 `angle >= 157.5 or angle < -157.5`로 `>=`를 사용해 정확히 ±157.5° 입력에서 분류가 비대칭이었다. atan2 결과를 `[0, 360)`으로 정규화한 뒤 모든 분기를 반열림 구간(`<`)으로 통일하고, wrap-around은 right만 (0°/360° 경계)에서 처리한다.
+
+14. **검증 도구 분리 (verification/):** 위 결함들을 의도 격리 단위로 검출/방어하기 위해 [`tests/training/rl/verification/`](../tests/training/rl/verification/) 아래에 challenging fixture 기반 verifier 17개를 신설했다. 기존 `validate_rl.py`(통합 4-phase)는 그대로 두고 보완. Group 1(전처리), Group 2(보상별 11개), Group 3(어드밴티지·손실 mock + 실제 모델 1 micro-step) 구성. 모든 verifier가 회귀 가드로 작동하여 위 13개 항목의 의도가 미래 코드 변경 시에도 유지됨을 보장한다.
+
 #### 체크포인트 및 출력
 
 ```
@@ -1108,6 +1122,12 @@ data/models/{model.name}/checkpoints/rl/{run_name}/
 | `scripts/training/run_rl.py` | Hydra 진입점, seed 고정, DDP 자동 전환, vllm_base 준비 |
 | `config/training/rl/pipeline.yaml` | GDPO, 보상함수, vLLM colocate, DDP 전체 설정 |
 | `tests/training/rl/validate_rl.py` | 4단계 통합 검증 (파일 존재·어댑터 구조·훈련 갱신·보상+생성) |
+| `tests/training/rl/verification/_common.py` | 토큰 fixture 빌더(의도된 violation 지원), metadata/reward_cfg 빌더, assert 헬퍼 |
+| `tests/training/rl/verification/group1_preprocessing/` | 변형 후 metadata 좌표 추적 + 8가지 drop 마스킹 격리 검증 |
+| `tests/training/rl/verification/group2_rewards/` | 11개 보상함수 의도 격리 검증 (각 보상별 challenging 엣지케이스 + 회귀 가드) |
+| `tests/training/rl/verification/group3_advantage/` | GDPO·token credit·batch_norm mock 검증 + 실제 모델 1 micro-step E2E |
+| `tests/training/rl/verification/run_all.py` | verification 일괄 실행 오케스트레이터 (`--skip-microstep`, `--only group2` 지원) |
+| `tests/training/rl/verification/findings.md` | 트랙 A(스크립트 실행) + 트랙 B(직접 코드 정독) 발견 사항 통합 보고서 |
 
 ### 학습 데이터 구성 (공통)
 

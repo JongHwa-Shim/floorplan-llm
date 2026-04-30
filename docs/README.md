@@ -147,7 +147,14 @@ floorplan-llm/
 │   │   │   └── validate_sft.py             # SFT 통합 검증 (로드·LoRA구조·훈련·저장·Resume)
 │   │   └── rl/
 │   │       ├── __init__.py
-│   │       └── validate_rl.py              # RL 통합 검증 (파일존재·어댑터구조·훈련갱신·보상+생성)
+│   │       ├── validate_rl.py              # RL 통합 검증 (파일존재·어댑터구조·훈련갱신·보상+생성)
+│   │       └── verification/               # 보상함수·어드밴티지·손실 격리 검증 도구 모음
+│   │           ├── _common.py              # vocab 로더, 토큰 fixture 빌더, reward_cfg 빌더, asserts
+│   │           ├── group1_preprocessing/   # 변형/drop 후 metadata 추출 검증 (2개)
+│   │           ├── group2_rewards/         # 11개 보상함수 의도 격리 검증
+│   │           ├── group3_advantage/       # GDPO·token credit·batch_norm·micro_step (4개)
+│   │           ├── run_all.py              # 일괄 실행 오케스트레이터
+│   │           └── findings.md             # 트랙 A(스크립트) + B(코드 정독) 통합 보고서
 │   ├── inference/
 │   │   └── validate_inference.py           # 추론 통합 검증 (import·모델 로드·토큰 생성·파싱)
 │   └── utils/
@@ -675,6 +682,33 @@ uv run python tests/training/rl/validate_rl.py --use_vllm
 ```
 
 > 모든 Phase가 `[PASS]`가 출력되어야 정상.
+
+---
+
+### RL 검증: 보상함수·어드밴티지·손실 격리 검증 (verification 도구 모음)
+
+`validate_rl.py`(통합 4-phase)와 별개로 **보상함수와 어드밴티지/손실 흐름을 의도 격리 단위로 검증**하는 도구 세트. challenging 엣지케이스 fixture로 각 보상의 책임 범위와 신용할당 토큰 위치까지 직접 단언한다.
+
+**구성 (3 그룹, 17 verifier, 100+ 케이스):**
+- **Group 1 — 전처리**: 변형(flip/scale/translate/zoom) 후 좌표가 `_extract_metadata()`에 정확히 반영되는지, 8가지 drop이 metadata 필드별로 올바르게 마스킹되는지 검증
+- **Group 2 — 보상별**: 11개 보상함수(format / count_total / count_type / orthogonality / no_overlap / room_in_outline / outline_in_room / coverage / connectivity / spatial / input_consistency) 각각에 대해 의도-위배 케이스 + 회귀 가드 케이스로 PASS/FAIL 단언
+- **Group 3 — 어드밴티지/손실**: `gdpo_group_normalize`, `compute_token_advantages`, `_batch_normalize` mock 검증 + 실제 모델 1 micro-step E2E (advantages shape, RL adapter trainable / SFT frozen, 캐시 일관성)
+
+```bash
+# 전체 일괄 (mock 기반만 — 빠름)
+uv run python tests/training/rl/verification/run_all.py --skip-microstep
+
+# 전체 (실제 모델 1 micro-step 포함, GPU + SFT adapter 필요)
+uv run python tests/training/rl/verification/run_all.py
+
+# 특정 그룹만
+uv run python tests/training/rl/verification/run_all.py --only group2
+
+# 단일 verifier 직접 실행
+uv run python tests/training/rl/verification/group2_rewards/verify_format_reward.py
+```
+
+**산출물**: 모든 verifier가 PASS 출력. 트랙 A(스크립트 실행) + 트랙 B(직접 코드 정독)로 발견된 의심점은 [tests/training/rl/verification/findings.md](../tests/training/rl/verification/findings.md)에 통합 정리.
 
 ---
 
