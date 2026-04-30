@@ -32,6 +32,19 @@ import random
 import sys
 from pathlib import Path
 
+# Mod Record: PyTorch 2.10 + bitsandbytes NF4 + DDP 환경에서 메모리 파편화로 인해 학습 step 중 OOM 발생.
+# (예: 19.45GB 할당 + 1.79GB unallocated reserved + 3.74GB 신규 요청 → fail)
+# expandable_segments는 가상 주소 공간을 점진적으로 확장하여 파편화를 제거한다. torch import 전에 설정.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
+# Mod Record: WSL2 + NCCL 2.27.5 (PyTorch 2.10에 동봉)에서 P2P/SHM 통신 경로가 깨지는 회귀 버그가 있다.
+# 증상: DDP 초기화 단계 _verify_param_shape_across_processes에서 ncclUnhandledCudaError "out of memory".
+# P2P/SHM/IB를 모두 비활성화하고 SOCKET 통신을 강제하면 정상 동작한다 (단일 머신 2-GPU에서 성능 손실 무시 가능).
+# PyTorch 2.6.x 환경에선 동봉 NCCL 버전이 낮아 이 경로를 안 탔으므로 문제 없었음.
+os.environ.setdefault("NCCL_P2P_DISABLE", "1")
+os.environ.setdefault("NCCL_SHM_DISABLE", "1")
+os.environ.setdefault("NCCL_IB_DISABLE", "1")
+
 import hydra
 import numpy as np
 import torch

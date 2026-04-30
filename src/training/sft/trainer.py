@@ -84,6 +84,10 @@ def build_training_arguments(cfg: DictConfig) -> TrainingArguments:
         # DoRA adapter 파라미터는 매 forward에서 gradient 수신
         # DDP unused parameter 탐지를 비활성화하여 불필요한 오버헤드 제거
         ddp_find_unused_parameters=False,
+        # Mod Record: PyTorch 2.10 + bitsandbytes NF4에서 DDP 초기화 시 broadcast_buffers=True(기본값)이면
+        # quantized weight buffer까지 NCCL로 rank간 브로드캐스트하여 ~수GB 임시 메모리 할당 → OOM.
+        # NF4 buffer는 rank간 동기화 불필요(각 rank가 동일하게 로드)하므로 False로 비활성화.
+        ddp_broadcast_buffers=False,
     )
 
     if max_steps > 0:
