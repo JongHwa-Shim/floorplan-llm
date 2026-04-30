@@ -320,10 +320,16 @@ def _has_door_between(
     room_b: "ParsedRoom",
     doors: list,
 ) -> bool:
-    """두 방 사이에 DOOR가 존재하는지 확인한다.
+    """두 방 사이의 공유 경계 근방에 DOOR가 존재하는지 확인한다.
 
-    DOOR 중심점이 두 방의 경계 근방에 위치하고,
-    두 방의 폴리곤 모두와 가까운 경우 연결로 판정한다.
+    Mod Record: 이전 구현은 자체 작성한 `_min_distance_to_polygon`을 사용하여
+    door 중심점에서 폴리곤 경계까지의 최소 거리를 계산했으나, 점이 폴리곤 내부에
+    있어도 경계까지 거리만 반환하므로 door가 한 방 내부 깊숙이 있어도 dist가
+    작게 나와 통과되는 false positive가 있었다.
+    shapely `polygon.boundary.distance(point)`는 점이 내부에 있어도 경계까지의
+    양수 거리를 반환한다. 단, 내부 깊숙이 있을수록 boundary까지 거리가 크므로
+    threshold를 넘으면 자동으로 거른다. door는 "두 방의 공유 벽 근처"에 있어야
+    하므로 양쪽 방의 boundary 모두에 가까운 경우만 통과시킨다.
 
     Args:
         room_a: 첫 번째 방.
@@ -331,87 +337,44 @@ def _has_door_between(
         doors: ParsedDoor 리스트.
 
     Returns:
-        DOOR가 두 방 사이에 위치하면 True.
+        DOOR가 두 방의 공유 경계 근방에 위치하면 True.
     """
-    if not doors or not room_a.coords or not room_b.coords:
+    if not doors or len(room_a.coords) < 3 or len(room_b.coords) < 3:
         return False
+
+    try:
+        from shapely.geometry import Point, Polygon
+    except ImportError:
+        logger.warning("shapely 미설치. door 위치 검증 불가.")
+        return False
+
+    try:
+        poly_a = Polygon(room_a.coords)
+        poly_b = Polygon(room_b.coords)
+        if not poly_a.is_valid:
+            poly_a = poly_a.buffer(0)
+        if not poly_b.is_valid:
+            poly_b = poly_b.buffer(0)
+        if poly_a.is_empty or poly_b.is_empty:
+            return False
+    except Exception:
+        return False
+
+    boundary_a = poly_a.boundary
+    boundary_b = poly_b.boundary
 
     for door in doors:
         if not door.is_valid:
             continue
-
-        door_cx, door_cy = door.cx, door.cy
-
-        # 문 중심점이 두 방의 경계 근방에 있는지 확인
-        dist_a = _min_distance_to_polygon(door_cx, door_cy, room_a.coords)
-        dist_b = _min_distance_to_polygon(door_cx, door_cy, room_b.coords)
-
+        door_pt = Point(door.cx, door.cy)
+        # boundary.distance는 점이 폴리곤 내부에 있어도 경계까지의 양수 거리를 반환.
+        # door가 한 방 내부 깊숙이 있으면 그 방의 boundary 거리가 threshold를 초과하여 걸러진다.
+        try:
+            dist_a = boundary_a.distance(door_pt)
+            dist_b = boundary_b.distance(door_pt)
+        except Exception:
+            continue
         if dist_a <= _DOOR_PROXIMITY_THRESHOLD and dist_b <= _DOOR_PROXIMITY_THRESHOLD:
             return True
 
     return False
-
-
-def _min_distance_to_polygon(
-    px: float,
-    py: float,
-    coords: list[tuple[int, int]],
-) -> float:
-    """점 (px, py)에서 폴리곤 경계까지의 최소 거리를 계산한다.
-
-    점이 폴리곤 내부에 있으면 경계까지 거리 0으로 처리한다.
-
-    Args:
-        px: 점의 X 좌표.
-        py: 점의 Y 좌표.
-        coords: 폴리곤 꼭짓점 리스트.
-
-    Returns:
-        폴리곤 경계까지의 최소 거리.
-    """
-    if not coords:
-        return float("inf")
-
-    min_dist = float("inf")
-    n = len(coords)
-
-    for i in range(n):
-        ax, ay = coords[i]
-        bx, by = coords[(i + 1) % n]
-
-        # 점에서 선분까지 거리 계산
-        dist = _point_to_segment_distance(px, py, ax, ay, bx, by)
-        min_dist = min(min_dist, dist)
-
-    return min_dist
-
-
-def _point_to_segment_distance(
-    px: float, py: float,
-    ax: float, ay: float,
-    bx: float, by: float,
-) -> float:
-    """점 P에서 선분 AB까지의 최소 거리를 계산한다.
-
-    Args:
-        px, py: 점 P 좌표.
-        ax, ay: 선분 시작점 A 좌표.
-        bx, by: 선분 끝점 B 좌표.
-
-    Returns:
-        최소 거리.
-    """
-    dx = bx - ax
-    dy = by - ay
-    length_sq = dx * dx + dy * dy
-
-    if length_sq < 1e-10:
-        # 선분이 점인 경우
-        return math.sqrt((px - ax) ** 2 + (py - ay) ** 2)
-
-    # 투영 비율 t ∈ [0, 1]
-    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / length_sq))
-    nearest_x = ax + t * dx
-    nearest_y = ay + t * dy
-
-    return math.sqrt((px - nearest_x) ** 2 + (py - nearest_y) ** 2)

@@ -321,8 +321,13 @@ class _OutputParser:
 
             y = self._parse_y()
             if y is None:
-                # Y 토큰 없음 (X 이후 비정상) → 오류
+                # Y 토큰 없음 (X 이후 비정상) → 오류 마킹 + 강제 진행.
+                # Mod Record: 이전에는 continue만 하여 self.pos가 X 다음(Y 자리)에 멈춰 있었다.
+                # 그 자리가 또 X 토큰이면 다음 iter에서 _parse_x가 다시 성공하는 식으로
+                # X 한 개가 미아가 되며 진행됐다. 무한 루프 가능성을 원천 차단하기 위해
+                # 한 토큰 강제 진행한다.
                 self.error_indices.append(self.pos - 1)  # X 토큰 위치
+                self.pos += 1
                 continue
 
             coords.append((x, y))
@@ -368,7 +373,14 @@ class _OutputParser:
                     doors.append(door)
             elif self._peek(self.NO_DOOR):
                 self.pos += 1  # <NO_DOOR>: 문 없음 표시, 건너뜀
-            elif self.ids[self.pos] == (self.vocab.eos_token_id or -9999):
+            elif (
+                self.vocab.eos_token_id is not None
+                and self.ids[self.pos] == self.vocab.eos_token_id
+            ):
+                # Mod Record: 이전에는 `eos_token_id or -9999`로 단락 처리했으나
+                # eos_token_id가 정수 0인 LLM에서는 0이 falsy로 평가되어 -9999로
+                # fallback되며 EOS 비교가 항상 False가 되는 잠재 버그가 있었다.
+                # 명시적 None 체크로 교체.
                 break
             else:
                 # 예기치 않은 토큰 → 오류 기록 후 스킵

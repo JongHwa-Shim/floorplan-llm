@@ -151,6 +151,13 @@ def _vector_to_direction(dx: float, dy: float) -> str:
         dy > 0 → 아래 방향 (below)
         dy < 0 → 위 방향 (above)
 
+    Mod Record: 이전 구현은 atan2의 [-180, 180] 범위를 그대로 사용하여 left
+    분기에서만 ``angle >= 157.5 or angle < -157.5`` 형태의 wrap-around 비교를
+    사용했고, 다른 분기는 모두 ``low <= x < high`` (`<`)를 사용해 부등호 일관성이
+    깨져 있었다. 정확히 angle = ±157.5에서 분류가 비대칭이었다. atan2 결과를
+    [0, 360)으로 정규화하여 wrap을 한 곳(right만 0°/360° 경계)으로 모으고
+    모든 분기를 `<` (반열림 구간)로 통일한다.
+
     Args:
         dx: X 방향 성분.
         dy: Y 방향 성분 (양수면 아래).
@@ -158,27 +165,26 @@ def _vector_to_direction(dx: float, dy: float) -> str:
     Returns:
         8방위 문자열 중 하나.
     """
-    # atan2로 각도 계산 (라디안, -π ~ π)
-    # 표준 수학 좌표계이지만 y 방향을 뒤집어서 이미지 좌표계로 처리
-    angle_rad = math.atan2(dy, dx)  # dy > 0이면 아래(-y 방향 포함)
+    angle_rad = math.atan2(dy, dx)
     angle_deg = math.degrees(angle_rad)
+    # [-180, 180] → [0, 360)으로 정규화하여 wrap 구간 단일화
+    if angle_deg < 0:
+        angle_deg += 360.0
 
-    # -180 ~ 180 범위를 8방위로 분류
-    # Right=0°, 반시계: above(90°), left(±180°), below(-90°)
-    # 이미지 좌표계: below는 dy>0 즉 angle > 0
-    if -22.5 <= angle_deg < 22.5:
+    # 모든 분기 ``low <= x < high`` 형태로 통일 (right만 wrap-around 경계 처리)
+    if angle_deg < 22.5 or angle_deg >= 337.5:
         return "right"
-    elif 22.5 <= angle_deg < 67.5:
-        return "right-below"   # dy>0이므로 아래-오른쪽
-    elif 67.5 <= angle_deg < 112.5:
+    elif angle_deg < 67.5:
+        return "right-below"
+    elif angle_deg < 112.5:
         return "below"
-    elif 112.5 <= angle_deg < 157.5:
+    elif angle_deg < 157.5:
         return "left-below"
-    elif angle_deg >= 157.5 or angle_deg < -157.5:
+    elif angle_deg < 202.5:
         return "left"
-    elif -157.5 <= angle_deg < -112.5:
+    elif angle_deg < 247.5:
         return "left-above"
-    elif -112.5 <= angle_deg < -67.5:
+    elif angle_deg < 292.5:
         return "above"
-    else:  # -67.5 <= angle_deg < -22.5
+    else:  # 292.5 <= angle_deg < 337.5
         return "right-above"

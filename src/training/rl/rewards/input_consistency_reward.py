@@ -57,7 +57,8 @@ def compute_input_consistency_reward(
             - rooms (list[dict]): visible 방 정보.
                 앵커 = type과 coords 모두 비어있지 않음.
                 drop_type = type="" AND coords 비어있지 않음.
-        threshold: 무게중심 거리 임계값 (px). 기본 30px.
+        threshold: 무게중심 거리 임계값 (px). 기본 ``_ANCHOR_DISTANCE_THRESHOLD`` = 15px
+            (좌표 노이즈 3σ=9px + 모델 오차 마진).
 
     Returns:
         [0, 1] 범위. 평가 대상 방의 평균 일관성 점수. 대상 없으면 1.0 (채점 비활성).
