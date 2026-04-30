@@ -823,7 +823,7 @@ data/models/{model.name}/checkpoints/sft/{run_name}/
 | 파일 | 역할 |
 |------|------|
 | `src/training/sft/model_loader.py` | HF Hub base model 로드 + `partial_state.pt` 커스텀 토큰 가중치 주입 + LoRA 적용. `load_base_model_with_partial_state()`, `build_lora_config()` 공개 API 제공 (RL에서 재사용) |
-| `src/training/sft/trainer.py` | `TrainingArguments` + 표준 `Trainer` 빌드 (패치 불필요) |
+| `src/training/sft/trainer.py` | `TrainingArguments` + 표준 `Trainer` 빌드. `_parse_save_total_limit()`: OmegaConf가 YAML `null`을 문자열 `"null"`로 전달하는 케이스를 방어적으로 처리 |
 | `scripts/training/run_sft.py` | Hydra 진입점, seed 고정, Resume 분기, 훈련 후 adapter + optimizer 저장 |
 | `config/training/sft/pipeline.yaml` | LoRA, 학습률, model_dir 등 SFT 전체 설정 |
 | `config/training/augmentation/sft.yaml` | SFT용 증강 파라미터 (embed_align.yaml과 동일) |
@@ -860,7 +860,7 @@ uv run python scripts/training/run_sft.py
 
 #### 목적
 
-RLVR(Reinforcement Learning from Verifiable Rewards) 기반 강화학습으로 규칙 기반 보상함수 7개를 적용한다. SFT로 평면도 생성 형식을 학습한 모델이 직교성·겹침 없음·연결성 등 기하학적 정확도를 스스로 높이도록 RL fine-tuning한다.
+RLVR(Reinforcement Learning from Verifiable Rewards) 기반 강화학습으로 규칙 기반 보상함수 11개를 적용한다. SFT로 평면도 생성 형식을 학습한 모델이 직교성·겹침 없음·outline 포함·연결성·입력 조건 일관성 등 기하학적 정확도를 스스로 높이도록 RL fine-tuning한다.
 
 TRL의 `GRPOTrainer`를 서브클래싱한 `RLTrainer`가 GDPO(보상별 독립 정규화) + 토큰 수준 신용할당을 구현한다.
 
@@ -890,7 +890,7 @@ RL params: requires_grad=True
 
 $$A_k^{(i)} = \frac{r_k^{(i)} - \mathbb{E}[r_k]}{\sqrt{\text{Var}(r_k)} + \epsilon}$$
 
-**2. 가중합 결합 (K=7개 보상)**
+**2. 가중합 결합 (K=11개 보상)**
 
 $$A^{(i)} = \sum_{k=1}^{K} w_k \cdot A_k^{(i)}$$
 
@@ -898,26 +898,114 @@ $$A^{(i)} = \sum_{k=1}^{K} w_k \cdot A_k^{(i)}$$
 
 포맷 파싱 실패 시 geometry/connectivity 보상이 의미 없으므로 강제 0.
 
-**4. 토큰 수준 신용할당 (적용 대상: format, orthogonality, no_overlap)**
+**4. 토큰 수준 신용할당 (적용 대상: format, orthogonality, no_overlap, room_in_outline, outline_in_room)**
 
 $$a_t = A \cdot (1 - m_t) - |A| \cdot \lambda \cdot m_t$$
 
-- $m_t$: 오류 토큰 마스크 (파싱 실패 위치, 직각 위반 꼭지점, 겹침 발생 방 토큰)
+- $m_t$: 오류 토큰 마스크 (파싱 실패 위치, 직각 위반 꼭지점, 겹침 발생 방 토큰, outline 벗어난 방/front door 토큰)
 - 정상 토큰: 어드밴티지 $A$ 그대로. 오류 토큰: 방향 페널티 추가.
 
 **5. 배치 정규화 (시퀀스 대표값 기반)**
 
-#### 7개 보상함수
+#### 11개 보상함수
 
 | 이름 | 산출 방식 | 토큰 신용할당 | 가중치 | 하드 게이트 |
 |------|---------|------------|--------|-----------|
 | `R_format` | 파싱 성공 여부 이진값 | ✅ (오류 위치 마스킹) | 1.0 | ✅ (0이면 모두 0) |
-| `R_count_total` | 방 전체 개수 일치 이진값 | ❌ | 0.5 | - |
-| `R_count_type` | 타입별 개수 정확도 연속값 | ❌ | 1.0 | - |
+| `R_count_total` | 방 전체 개수 일치 이진값 (drop_room_summary_total 시 채점 비활성) | ❌ | 0.5 | - |
+| `R_count_type` | ROOM_SUMMARY에 노출된 타입별 개수 정확도 연속값 | ❌ | 1.0 | - |
 | `R_orthogonality` | 꼭지점 직각 비율 | ✅ (위반 꼭지점 마스킹) | 1.5 | - |
 | `R_no_overlap` | 겹침 없음 (Shapely) | ✅ (겹친 방 토큰 마스킹) | 2.0 | - |
-| `R_connectivity` | 문 연결관계 (헝가리안 매칭) | ❌ | 1.0 | - |
-| `R_spatial` | 8방위 공간관계 정확도 | ❌ | 0.5 | - |
+| `R_room_in_outline` | 비-outline 방 + front door의 outline 내 포함 비율 평균 (Shapely). front door는 {cx,cy,w,h}에서 직사각형 4개 꼭짓점 구성 | ✅ (outline 벗어난 방·front door 토큰 마스킹) | 1.5 | - |
+| `R_outline_in_room` | outline 꼭짓점이 방 내부에 포함되는지 (케이스 B 검출). 방 꼭짓점이 모두 outline 안이나 방 edge가 outline 오목부를 가로지르는 경우 처리 | ✅ (해당 outline 꼭짓점 토큰 마스킹) | 1.0 | - |
+| `R_coverage` | outline 내 빈공간 보수값 $1 - \text{area}(O \setminus \bigcup R_i) / \text{area}(O)$ (Shapely `unary_union`) | ❌ | 1.5 | - |
+| `R_connectivity` | 문 연결관계 (헝가리안 + 후보 기반 satisfiability) | ❌ | 1.0 | - |
+| `R_spatial` | 8방위 공간관계 정확도 (헝가리안 + 후보 기반 satisfiability) | ❌ | 0.5 | - |
+| `R_input_consistency` | 입력 좌표 명시 방(앵커+drop_type) 무게중심 일관성 (선형 거리 점수) | ❌ | 1.5 | - |
+
+**`R_room_in_outline` 산출식:**
+
+비-outline 방 집합 $\mathcal{R}$ 과 front door $f$ 에 대해 (front door 존재 시)
+
+$$R_{\text{room\_in\_outline}} = \frac{1}{|\mathcal{R}| + \mathbf{1}[f \neq \emptyset]} \left( \sum_{r \in \mathcal{R}} \frac{\text{area}(r \cap \text{outline})}{\text{area}(r)} + \mathbf{1}[f \neq \emptyset] \cdot \frac{\text{area}(f \cap \text{outline})}{\text{area}(f)} \right)$$
+
+- front door 폴리곤: 토큰 $\{cx, cy, w, h\}$ 에서 $(cx, cy)$를 left-top, $(cx+w, cy+h)$를 right-bottom으로 하는 직사각형 4개 꼭짓점 구성
+- `containment_ratio < 1 - 10^{-4}` 인 방의 outline 밖 꼭짓점을 신용할당 오류로 마킹
+- front door는 left-top $(cx, cy)$와 right-bottom $(cx+w, cy+h)$ 두 대표 꼭짓점을 검사하여 각각 $\{cx, cy\}$ 토큰 쌍, $\{w, h\}$ 토큰 쌍을 마킹
+- outline 자체는 평가 대상에서 제외 (rooms[0]에서 분리)
+
+**`R_outline_in_room` 산출식 (케이스 B 검출):**
+
+$R_{\text{room\_in\_outline}}$ 은 방 꼭짓점이 outline 밖으로 나간 케이스 A만 검출한다. 케이스 B — 방 꼭짓점은 모두 outline 내부이지만 방의 edge가 outline의 오목부(concavity)를 가로지르는 경우 — 는 $R_{\text{room\_in\_outline}}$으로 검출되지 않는다. $R_{\text{outline\_in\_room}}$이 이를 담당한다.
+
+outline의 각 꼭짓점 $v$ 를 순회하며, $v$ 가 비-outline 방들의 합집합 외부에 있으면 해당 꼭짓점의 좌표 토큰을 신용할당 오류로 마킹한다.
+
+$$R_{\text{outline\_in\_room}} = \frac{1}{|V_{\text{outline}}|} \sum_{v \in V_{\text{outline}}} \mathbf{1}\bigl[v \in \bigcup_{r \in \mathcal{R}} r\bigr]$$
+
+- 신용할당 ON: outline 꼭짓점 토큰 마킹
+
+**`R_coverage` 산출식 (R_room_in_outline의 쌍대):**
+
+outline 폴리곤 $O$ 와 비-outline 방 집합 $\mathcal{R}$ 에 대해 빈공간 비율의 보수값으로 정의한다.
+
+$$R_{\text{coverage}} = 1 - \frac{\text{area}\bigl(O \setminus \bigcup_{r \in \mathcal{R}} r\bigr)}{\text{area}(O)}$$
+
+- shapely `unary_union`으로 모든 방의 합집합을 한 번에 계산한 뒤 `outline.difference(union)`으로 빈공간 면적 산출
+- $R_{\text{room\_in\_outline}}$(방 → outline)과 $R_{\text{coverage}}$(outline → 방들 합집합)는 서로 반대 방향 측정의 쌍대 관계. **두 보상 모두 1.0이어야** 비로소 "$O = \bigsqcup_i r_i$"라는 평면도 본질 제약이 강제되며, 단독 사용 시 reward hacking 여지가 남는다 (예: 작은 방 1~2개로 outline 일부만 채우는 경우).
+- **신용할당 OFF (sequence-level only):** 빈공간 발생 책임 소재가 본질적으로 모호하다(좌표 잘못 vs 방 개수 부족). 또한 입력 좌표에 노이즈 증강이 들어가 있어 "어느 좌표가 정답인지" 자체가 모호하므로 토큰 단위 페널티는 잘못된 시그널을 줄 수 있다. GDPO의 G개 completion 간 z-score 정규화가 sequence-level 시그널만으로도 충분한 상대적 학습 신호를 제공한다.
+
+**`R_input_consistency` 산출식:**
+
+평가 대상 방 두 종류:
+- **앵커 방** $\mathcal{A}$: type+coords 모두 visible (drop_block / drop_type / drop_coords 미적용). 타입 그룹별 헝가리안으로 결정 매핑.
+- **drop_type 방** $\mathcal{D}$: coords visible + type="" (drop_type 적용). 앵커 매핑 후 잔여 출력 방 대상으로 타입 무관 헝가리안으로 매핑.
+
+$$s_r = \max\!\left(0, 1 - \frac{d_r}{\tau}\right) \quad,\quad R_{\text{input\_consistency}} = \frac{1}{|\mathcal{A}| + |\mathcal{D}|} \sum_{r \in \mathcal{A} \cup \mathcal{D}} s_r$$
+
+- $\tau$ 기본값: 15px (좌표 노이즈 3σ=9px + 모델 오차 마진. transform 증강은 입력/출력에 동일 적용되어 상대 오차 없음)
+- 앵커와 drop_type 방이 모두 없으면 채점 비활성 (1.0 반환)
+- 미매칭 앵커는 점수 0; 앵커는 타입 불일치도 점수 0
+- drop_type 방은 타입 검증 없이 거리 점수만 산출 (타입 정보 자체가 없으므로)
+- 신용할당 OFF: 출력에 RID가 없어 특정 토큰을 오류로 마킹하기 어려운 구조이며, 거리 기반 연속 점수가 자체적으로 그래디언트 신호를 제공한다.
+
+#### 모델 시점 metadata + 후보 기반 satisfiability 채점
+
+연결성/공간관계/입력 일관성 보상은 입력 프롬프트의 **모델 시점**(증강 후 + drop 반영) metadata를 기준으로 채점된다. 이 설계는 다음 두 가지 부당 채점을 동시에 해소한다:
+
+1. **변형 증강에 따른 좌표계 불일치:** 이전에는 metadata가 원본 좌표를, 출력은 변형 후 좌표를 가져 무게중심 비교가 무의미했다.
+2. **삭제 증강된 정보로 모델을 채점:** 이전에는 metadata에 full GT가 있어 drop된 edge/spatial까지 강제 채점되었다.
+
+**metadata 구성 규칙 (모델 시점):**
+
+| 입력 정보 손실 | metadata 반영 |
+|---------------|--------------|
+| `drop_block(rid)` | metadata.rooms에서 해당 방 제거 |
+| `drop_type(rid)` | 해당 방의 `type=""`로 마스킹 (좌표는 유지) |
+| `drop_coords(rid)` | 해당 방의 `coords=[]`로 마스킹 (type은 유지) |
+| `drop_edge(idx)` | metadata.edges에서 제거 |
+| `drop_pair(idx, mode)` | edge.pair를 `[kept_rid]` 또는 `[]`로 마스킹 |
+| `drop_door(idx, mode)` | door 정보 부분 마스킹 (position/orientation/all) |
+| `drop_spatial(idx)` | metadata.spatial에서 제거 |
+| `drop_front_door[_coords]` | front_door 또는 그 좌표만 None |
+| `drop_room_summary_total` | `total_rooms=None` (count_total 채점 비활성 신호) |
+| `drop_room_summary_types(t)` | type_counts에서 해당 타입 제거 |
+
+**의도적 비대칭:** `metadata.total_rooms` ≠ `len(metadata.rooms)`. 전자는 ROOM_SUMMARY로 노출된 GT 카운트(drop_block 방 포함), 후자는 모델이 본 visible 방만 (drop_block 제외). count 보상은 GT 카운트로 채점, 매칭은 visible 방에 한해 수행.
+
+**2-tier 매칭 (connectivity / spatial):**
+
+입력 RID는 다음 4가지로 분류되어 각각 다른 매칭 전략으로 처리된다:
+
+| 분류 | 조건 | 후보 출력 방 |
+|------|-----|------------|
+| 앵커 | type+coords 모두 visible | 헝가리안으로 결정 매핑된 단일 인덱스 |
+| 자유(drop_coords) | type만 visible | 같은 type 출력 방 모두 |
+| 자유(drop_type) | coords만 visible | 무게중심 거리 ≤ 30px 출력 방 |
+| drop_block | metadata에 없음 | 빈 리스트 (호출 자체 발생 안 함) |
+
+각 제약(edge / spatial)은 두 RID의 후보 집합 모든 조합 $(a, b)$ 에 대해 만족 여부를 검사하고, **하나라도 만족하면 통과**로 채점한다 (satisfiability-based). 모델이 식별 불가능한 정보(예: drop_coords된 같은 type 방의 RID 구분)에 대해 부당 페널티가 부과되지 않는다.
+
+`R_input_consistency`는 앵커 방(결정 매핑)과 drop_type 방(타입 무관 헝가리안, 잔여 출력 방 대상)만 해당하므로 satisfiability 후보 확장은 사용하지 않는다.
 
 #### vLLM Colocate 통합
 
@@ -961,6 +1049,14 @@ gradient checkpoint   ~3 GB
 
 3. **vllm_base NF4 역양자화:** `save_pretrained()`는 bitsandbytes NF4 포맷으로 저장 → vLLM이 로드 불가. `prepare_vllm_base_model()`에서 Params4bit → bf16 역양자화 후 safetensors로 직접 저장. `.base_layer.` 이름 제거, `lora_` 파라미터 제외.
 
+4. **metadata 모델 시점 재구성 (drop 반영):** 이전에는 `_extract_metadata()`가 증강 전 원본 sample을 받아 full GT를 metadata에 담았다. 결과적으로 (a) flip/scale/translate/zoom 증강 시 metadata 좌표계와 출력 좌표계 불일치로 헝가리안 무게중심 매칭이 무의미해졌고, (b) drop_edge / drop_spatial 등 모델이 보지 못한 제약까지 강제 채점되었다. 현재는 `pipeline()` 호출 후 `last_augmented_sample`(변형 적용된 sample)과 `last_drop_state`를 참조하여 drop을 데이터에 직접 반영한 모델 시점 metadata를 구성한다. drop_state 필드는 metadata에 노출하지 않으며, reward 함수는 metadata만 보고 자연스럽게 visible 정보로만 채점된다.
+
+5. **count 보상의 None / 부분 drop 처리:** `total_rooms=None` (drop_room_summary_total) 시 `R_count_total`은 1.0 반환 (채점 비활성). `R_count_type`은 `expected_counts.keys()`만 순회하여 drop된 타입(drop_room_summary_types)에 대한 부당 페널티 회피 — 이전 구현은 출력 타입까지 합집합으로 순회해 drop된 타입을 모델이 출력하면 0점을 부여했었다.
+
+6. **헝가리안 매칭의 자유 방 제외:** drop_coords 방은 `coords=[]`로 metadata에 남으므로 무게중심 계산 시 `(0, 0)`이 되어 잘못된 매칭이 발생했다. 또한 drop_type 방은 `type=""`로 격리되어 자동 미매칭이지만 비명시적이었다. 현재는 `_hungarian_match()`가 두 경우 모두 매칭 후보에서 명시적으로 제외한다. 자유 방의 RID는 connectivity / spatial에서 후보 확장(`_get_candidate_output_indices()`)으로 satisfiability 채점된다.
+
+7. **`R_input_consistency` drop_type 방 확장:** 초기 구현은 앵커(type+coords 모두 visible)에만 채점했다. drop_type 방(coords visible, type="")도 좌표 힌트가 있으므로 "해당 위치에 방을 그렸는가"를 평가할 수 있다. 타입 그룹 분류가 불가하므로 앵커 헝가리안 완료 후 남은 출력 방들을 대상으로 타입 무관 헝가리안(`_match_drop_type_rooms()`)을 별도로 수행한다. 동시에 τ를 30px → 15px로 축소했다 (transform 증강은 입력/출력 좌표에 동일 적용되어 상대 오차가 없으므로 변형 잔차가 실질적 오차 요인이 아님을 확인; 실질 오차는 노이즈 3σ=9px + 모델 오차 마진).
+
 #### 체크포인트 및 출력
 
 ```
@@ -985,9 +1081,16 @@ data/models/{model.name}/checkpoints/rl/{run_name}/
 | `src/training/rl/model_loader.py` | HF Hub NF4 + partial_state.pt + SFT(frozen)+RL(trainable) 멀티어댑터 구성 + vllm_base bf16 저장 |
 | `src/training/rl/trainer.py` | `RLTrainer` (GRPOTrainer 서브클래스) — GDPO + 토큰 신용할당 |
 | `src/training/rl/advantage.py` | `gdpo_group_normalize()`, `compute_token_advantages()`, `_batch_normalize()` |
-| `src/training/rl/dataset.py` | `RLPromptDataset` — 프롬프트+metadata만 로드 (출력 label 없음) |
+| `src/training/rl/dataset.py` | `RLPromptDataset` — 프롬프트 + 모델 시점 metadata 로드 (drop 데이터에 반영, 출력 label 없음) |
 | `src/training/rl/rewards/__init__.py` | `compute_all_rewards()` 공개 API |
-| `src/training/rl/rewards/*.py` | 7개 규칙 기반 보상함수 (parser, format, geometry, connectivity, count, spatial, credit_assignment) |
+| `src/training/rl/rewards/*.py` | 11개 규칙 기반 보상함수 (parser, format, geometry, room_in_outline, outline_in_room, coverage, connectivity, count, spatial, input_consistency, credit_assignment) |
+| `src/training/rl/rewards/parser.py` | 생성 토큰 파싱. `ParsedFloorplan.front_door_token_indices` ([cx_idx, cy_idx, w_idx, h_idx]) 포함 |
+| `src/training/rl/rewards/room_in_outline_reward.py` | 비-outline 방 + front door의 outline 포함 검증 (케이스 A). front door는 {cx,cy,w,h}로 직사각형 구성 |
+| `src/training/rl/rewards/outline_in_room_reward.py` | outline 꼭짓점이 방 내부 포함 여부 검증 (케이스 B) |
+| `src/training/rl/rewards/connectivity_reward.py` | 헝가리안 매칭(앵커) + `_get_candidate_output_indices()` 후보 확장 + satisfiability 기반 채점 |
+| `src/training/rl/rewards/spatial_reward.py` | 동일 후보 헬퍼 재사용 + 8방위 satisfiability |
+| `src/training/rl/rewards/coverage_reward.py` | shapely `unary_union` + `difference`로 outline 내 빈공간 비율 산출 (sequence-level) |
+| `src/training/rl/rewards/input_consistency_reward.py` | 좌표 명시 방(앵커+drop_type) 무게중심 선형 거리 점수 (threshold=15px 기본) |
 | `scripts/training/run_rl.py` | Hydra 진입점, seed 고정, DDP 자동 전환, vllm_base 준비 |
 | `config/training/rl/pipeline.yaml` | GDPO, 보상함수, vLLM colocate, DDP 전체 설정 |
 | `tests/training/rl/validate_rl.py` | 4단계 통합 검증 (파일 존재·어댑터 구조·훈련 갱신·보상+생성) |

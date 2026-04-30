@@ -134,6 +134,27 @@ rewards:
     credit_assignment: true
     penalty_scale: 2.0
 
+  room_in_outline:
+    enabled: true
+    weight: 1.5
+    credit_assignment: true
+    penalty_scale: 1.5
+
+  # outline 꼭짓점이 방 내부에 포함되는지 (room_in_outline 케이스 B 검출)
+  # 방 꼭짓점은 모두 outline 안에 있으나 방 edge가 outline 오목부를 가로지를 때 발생
+  outline_in_room:
+    enabled: true
+    weight: 1.0
+    credit_assignment: true
+    penalty_scale: 1.5
+
+  # outline 내 빈공간 비율 보수값 (room_in_outline의 쌍대)
+  # 신용할당 OFF: 빈공간 책임 소재 모호 + 입력 좌표 노이즈로 토큰 단위 시그널 부정확
+  coverage:
+    enabled: true
+    weight: 1.5
+    credit_assignment: false
+
   connectivity:
     enabled: true
     weight: 1.0
@@ -143,6 +164,15 @@ rewards:
     enabled: true
     weight: 0.5
     credit_assignment: false
+
+  # 입력 프롬프트의 좌표 명시 방(앵커+drop_type)이 출력에 일관되게 포함되는지 검증
+  # threshold: 무게중심 거리 임계값(px). 노이즈 3σ=9px + 모델 오차 마진. transform 증강은
+  # 입력/출력 좌표에 동일 적용되므로 상대 오차 없음.
+  input_consistency:
+    enabled: true
+    weight: 1.5
+    credit_assignment: false
+    threshold: 15.0
 
 # GDPO + 토큰 신용할당 어드밴티지 계산 설정
 advantage:

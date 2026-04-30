@@ -8,8 +8,8 @@ R_orthogonality:
 
 R_no_overlap:
     전체 방 면적 대비 겹치는 면적 비율.
-    겹치는 교집합 폴리곤의 꼭짓점에 가장 가까운 원본 좌표 토큰을 오류로 표시 (신용할당).
-    양쪽 방 모두에 오류 마킹.
+    상대 방 폴리곤 내부에 실제로 포함된 꼭짓점(침범 꼭짓점)만 오류로 표시 (신용할당).
+    공유 경계선 위 꼭짓점은 오탐 방지를 위해 제외.
 
 의존성: shapely>=2.0.0
 """
@@ -98,7 +98,7 @@ def compute_no_overlap_reward(
     """방 간 겹침 면적 비율 기반 보상을 반환한다.
 
     outline을 제외한 방들 사이에 shapely Polygon intersection으로 겹침 면적을 계산한다.
-    겹치는 영역의 꼭짓점에 가장 가까운 원본 방 좌표 토큰을 오류로 마킹한다.
+    각 방의 꼭짓점이 상대 방 폴리곤 내부에 실제로 포함되는지 검사하여 책임 꼭짓점만 오류로 마킹한다.
 
     Args:
         parsed: parse_output_tokens()의 반환값.
@@ -157,18 +157,20 @@ def compute_no_overlap_reward(
 
             overlap_area += intersection.area
 
-            # 겹치는 영역의 꼭짓점에 가장 가까운 원본 좌표 토큰 인덱스를 오류로 마킹
-            # 양쪽 방(i, j) 모두에 대해 처리
+            # 책임 꼭짓점 마킹: 각 방의 꼭짓점 중 상대 방 폴리곤 내부에 있는 것만 오류로 마킹
+            # - 방 i의 꼭짓점이 polys[j] 내부에 있으면 방 i에게 책임
+            # - 방 j의 꼭짓점이 polys[i] 내부에 있으면 방 j에게 책임
+            # contains()는 경계선 위 꼭짓점(공유 벽)은 제외하여 오탐 방지
             try:
-                inter_coords = list(intersection.exterior.coords)
-                for room_idx in (i, j):
+                from shapely.geometry import Point as ShapelyPoint
+                for room_idx, other_poly in ((i, polys[j]), (j, polys[i])):
                     room = non_outline_rooms[room_idx]
-                    for inter_pt in inter_coords:
-                        nearest_idx = _find_nearest_coord_index(room.coords, inter_pt)
-                        if nearest_idx >= 0 and nearest_idx < len(room.coord_token_indices):
-                            tok_idx = room.coord_token_indices[nearest_idx]
-                            error_indices.append(tok_idx)
-                            error_indices.append(tok_idx + 1)  # Y 토큰
+                    for coord_idx, coord in enumerate(room.coords):
+                        if other_poly.contains(ShapelyPoint(coord)):
+                            if coord_idx < len(room.coord_token_indices):
+                                tok_idx = room.coord_token_indices[coord_idx]
+                                error_indices.append(tok_idx)
+                                error_indices.append(tok_idx + 1)  # Y 토큰
             except Exception:
                 pass
 
@@ -177,32 +179,3 @@ def compute_no_overlap_reward(
     reward = 1.0 - overlap_ratio
 
     return reward, sorted(set(error_indices))
-
-
-def _find_nearest_coord_index(
-    coords: list[tuple[int, int]],
-    point: tuple[float, float],
-) -> int:
-    """point에 가장 가까운 꼭짓점 인덱스를 반환한다.
-
-    Args:
-        coords: 꼭짓점 좌표 리스트.
-        point: 비교할 점 (x, y).
-
-    Returns:
-        가장 가까운 꼭짓점의 인덱스. coords가 비어있으면 -1.
-    """
-    if not coords:
-        return -1
-
-    min_dist_sq = float("inf")
-    nearest = 0
-    px, py = point
-
-    for i, (cx, cy) in enumerate(coords):
-        dist_sq = (cx - px) ** 2 + (cy - py) ** 2
-        if dist_sq < min_dist_sq:
-            min_dist_sq = dist_sq
-            nearest = i
-
-    return nearest

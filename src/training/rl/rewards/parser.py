@@ -84,6 +84,8 @@ class ParsedFloorplan:
         success: 파싱 완전 성공 여부 (level == 3).
         level: 파싱 단계. 0~3.
         front_door: 현관문 정보. 없으면 None.
+        front_door_token_indices: front_door 좌표 토큰 인덱스 [cx_idx, cy_idx, w_idx, h_idx].
+            front_door가 None이거나 파싱 실패 시 빈 리스트. 신용할당용.
         rooms: 파싱된 방 블록 리스트 (outline 포함, 첫 번째가 outline).
         doors: 파싱된 문 블록 리스트 (방 블록 이후에 등장하는 DOOR).
         error_indices: 포맷 오류 토큰 인덱스 리스트 (신용할당용).
@@ -97,6 +99,7 @@ class ParsedFloorplan:
     doors: list[ParsedDoor]
     error_indices: list[int]
     error_spans: dict[str, list[int]] = field(default_factory=dict)
+    front_door_token_indices: list[int] = field(default_factory=list)  # [cx_idx, cy_idx, w_idx, h_idx]
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +160,7 @@ class _OutputParser:
         self.id_to_token = vocab.id_to_token
 
         self.error_indices: list[int] = []
+        self._front_door_tok_indices: list[int] = []
 
     def parse(self) -> ParsedFloorplan:
         """메인 파싱 진입점.
@@ -202,6 +206,7 @@ class _OutputParser:
             doors=doors,
             error_indices=list(self.error_indices),
             error_spans=error_spans,
+            front_door_token_indices=list(self._front_door_tok_indices),
         )
 
     # -------------------------------------------------------------------
@@ -230,7 +235,10 @@ class _OutputParser:
             return None
 
         # 좌표 파싱: cx, cy, SEP_DOOR, w, h
+        # 신용할당을 위해 각 좌표 토큰의 인덱스를 파싱 전에 미리 기록
+        cx_idx = self.pos
         cx = self._parse_x()
+        cy_idx = self.pos
         cy = self._parse_y()
         if not self._peek(self.SEP_DOOR):
             # SEP_DOOR 누락 → 오류 기록 후 복구 시도
@@ -238,7 +246,9 @@ class _OutputParser:
         else:
             self.pos += 1
 
+        w_idx = self.pos
         w = self._parse_x()
+        h_idx = self.pos
         h = self._parse_y()
 
         if not self._peek(self.END_DOOR):
@@ -249,6 +259,8 @@ class _OutputParser:
         if cx is None or cy is None or w is None or h is None:
             return None
 
+        # 파싱 성공 시에만 토큰 인덱스 저장
+        self._front_door_tok_indices = [cx_idx, cy_idx, w_idx, h_idx]
         return {"cx": cx, "cy": cy, "w": w, "h": h}
 
     def _parse_rooms(self) -> list[ParsedRoom]:

@@ -3,13 +3,17 @@
 모든 보상 계산을 총괄하는 compute_all_rewards() 함수를 제공한다.
 
 보상 목록:
-    - format:       R_format (Hard Gate, 신용할당 ON)
-    - count_total:  R_count_total (이진)
-    - count_type:   R_count_type (연속)
-    - orthogonality: R_orthogonality (직각도, 신용할당 ON)
-    - no_overlap:   R_no_overlap (겹침, 신용할당 ON)
-    - connectivity: R_connectivity (연결성)
-    - spatial:      R_spatial (공간 관계)
+    - format:             R_format (Hard Gate, 신용할당 ON)
+    - count_total:        R_count_total (이진)
+    - count_type:         R_count_type (연속)
+    - orthogonality:      R_orthogonality (직각도, 신용할당 ON)
+    - no_overlap:         R_no_overlap (겹침, 신용할당 ON)
+    - room_in_outline:    R_room_in_outline (방 꼭짓점이 outline 밖에 있는지, 케이스 A, 신용할당 ON)
+    - outline_in_room:    R_outline_in_room (outline 꼭짓점이 방 안에 포함되는지, 케이스 B, 신용할당 ON)
+    - coverage:           R_coverage (outline 내 빈공간 보수값, sequence-level)
+    - connectivity:       R_connectivity (연결성)
+    - spatial:            R_spatial (공간 관계)
+    - input_consistency:  R_input_consistency (입력 좌표 명시 방 포함 일관성 — 앵커+drop_type)
 """
 
 from __future__ import annotations
@@ -29,8 +33,15 @@ from src.training.rl.rewards.geometry_reward import (
     compute_orthogonality_reward,
     compute_no_overlap_reward,
 )
+from src.training.rl.rewards.room_in_outline_reward import compute_room_in_outline_reward
+from src.training.rl.rewards.outline_in_room_reward import compute_outline_in_room_reward
+from src.training.rl.rewards.coverage_reward import compute_coverage_reward
 from src.training.rl.rewards.connectivity_reward import compute_connectivity_reward
 from src.training.rl.rewards.spatial_reward import compute_spatial_reward
+from src.training.rl.rewards.input_consistency_reward import (
+    compute_input_consistency_reward,
+    _ANCHOR_DISTANCE_THRESHOLD,
+)
 from src.training.rl.rewards.credit_assignment import build_error_mask
 
 if TYPE_CHECKING:
@@ -91,7 +102,8 @@ def compute_all_rewards(
     # Hard Gate: format 실패 시 나머지 보상 모두 0
     if not hard_gate_pass:
         for name in ("count_total", "count_type", "orthogonality", "no_overlap",
-                     "connectivity", "spatial"):
+                     "room_in_outline", "outline_in_room", "coverage",
+                     "connectivity", "spatial", "input_consistency"):
             cfg = reward_cfg.get(name, {})
             if cfg.get("enabled", True):
                 rewards[name] = 0.0
@@ -128,6 +140,27 @@ def compute_all_rewards(
         if cfg.get("credit_assignment", False) and no_overlap_errors:
             error_masks["no_overlap"] = build_error_mask(seq_length, no_overlap_errors)
 
+    # R_room_in_outline
+    cfg = reward_cfg.get("room_in_outline", {})
+    if cfg.get("enabled", True):
+        rio_reward, rio_errors = compute_room_in_outline_reward(parsed)
+        rewards["room_in_outline"] = rio_reward
+        if cfg.get("credit_assignment", False) and rio_errors:
+            error_masks["room_in_outline"] = build_error_mask(seq_length, rio_errors)
+
+    # R_outline_in_room (케이스 B: outline 꼭짓점이 방 내부에 포함되는지)
+    cfg = reward_cfg.get("outline_in_room", {})
+    if cfg.get("enabled", True):
+        otr_reward, otr_errors = compute_outline_in_room_reward(parsed)
+        rewards["outline_in_room"] = otr_reward
+        if cfg.get("credit_assignment", False) and otr_errors:
+            error_masks["outline_in_room"] = build_error_mask(seq_length, otr_errors)
+
+    # R_coverage (sequence-level only, 신용할당 미지원)
+    cfg = reward_cfg.get("coverage", {})
+    if cfg.get("enabled", True):
+        rewards["coverage"] = compute_coverage_reward(parsed)
+
     # R_connectivity
     cfg = reward_cfg.get("connectivity", {})
     if cfg.get("enabled", True):
@@ -137,6 +170,14 @@ def compute_all_rewards(
     cfg = reward_cfg.get("spatial", {})
     if cfg.get("enabled", True):
         rewards["spatial"] = compute_spatial_reward(parsed, metadata)
+
+    # R_input_consistency
+    cfg = reward_cfg.get("input_consistency", {})
+    if cfg.get("enabled", True):
+        threshold = float(cfg.get("threshold", _ANCHOR_DISTANCE_THRESHOLD))
+        rewards["input_consistency"] = compute_input_consistency_reward(
+            parsed, metadata, threshold=threshold,
+        )
 
     return {
         "rewards": rewards,

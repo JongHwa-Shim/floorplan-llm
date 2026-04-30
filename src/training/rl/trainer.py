@@ -167,7 +167,8 @@ class RLTrainer(GRPOTrainer):
         funcs = []
         reward_order = [
             "format", "count_total", "count_type",
-            "orthogonality", "no_overlap", "connectivity", "spatial",
+            "orthogonality", "no_overlap", "room_in_outline", "coverage",
+            "connectivity", "spatial", "input_consistency",
         ]
 
         for name in reward_order:

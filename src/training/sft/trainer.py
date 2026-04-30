@@ -17,6 +17,23 @@ from src.training.embed_align.collator import EmbedAlignCollator
 logger = logging.getLogger(__name__)
 
 
+def _parse_save_total_limit(value: int | str | None) -> int | None:
+    """save_total_limit 설정값을 안전하게 파싱한다.
+
+    OmegaConf가 YAML null을 Python None 대신 문자열 "null"로 전달하는 경우가 있어
+    명시적으로 None으로 변환한다. None이면 rotate_checkpoints가 제한 없이 전체 보존.
+
+    Args:
+        value: config에서 읽은 원시값 (None, int, 또는 "null" 문자열).
+
+    Returns:
+        None (제한 없음) 또는 int (최대 보존 수).
+    """
+    if value is None or value == "null":
+        return None
+    return int(value)
+
+
 def build_training_arguments(cfg: DictConfig) -> TrainingArguments:
     """Hydra config로부터 SFT용 TrainingArguments를 생성한다.
 
@@ -52,7 +69,9 @@ def build_training_arguments(cfg: DictConfig) -> TrainingArguments:
         report_to=train_cfg.report_to,
         run_name=train_cfg.run_name,
         seed=train_cfg.seed,
-        save_total_limit=train_cfg.get("save_total_limit", 3),
+        # Mod Record: OmegaConf에서 null이 Python None 대신 문자열 "null"로 전달되는 경우가 있어
+        # rotate_checkpoints의 "null" <= 0 비교에서 TypeError 발생. 명시적으로 None으로 변환.
+        save_total_limit=_parse_save_total_limit(train_cfg.get("save_total_limit", None)),
         load_best_model_at_end=train_cfg.get("load_best_model_at_end", True),
         metric_for_best_model="eval_loss",
         greater_is_better=False,

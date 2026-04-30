@@ -89,17 +89,21 @@ floorplan-llm/
 │   │   └── rl/                     # RL(GRPO) 훈련 모듈
 │   │       ├── __init__.py
 │   │       ├── model_loader.py     # SFT(frozen) + RL(trainable) 멀티어댑터 구성 + vllm_base bf16 저장
-│   │       ├── dataset.py          # RLPromptDataset (prompt+metadata만, 출력 label 없음)
+│   │       ├── dataset.py          # RLPromptDataset (프롬프트 + 모델 시점 metadata, drop 데이터에 반영)
 │   │       ├── advantage.py        # GDPO 정규화 + 토큰 신용할당 + 배치 정규화
 │   │       ├── trainer.py          # RLTrainer (GRPOTrainer 서브클래스)
-│   │       └── rewards/            # 7개 규칙 기반 보상함수
+│   │       └── rewards/            # 11개 규칙 기반 보상함수
 │   │           ├── __init__.py     # compute_all_rewards 공개 API
-│   │           ├── parser.py       # 생성 토큰 파싱
+│   │           ├── parser.py       # 생성 토큰 파싱 (ParsedFloorplan, front_door_token_indices 포함)
 │   │           ├── format_reward.py
 │   │           ├── geometry_reward.py
-│   │           ├── connectivity_reward.py
+│   │           ├── room_in_outline_reward.py    # 방 + front door의 outline 포함 검증 (케이스 A)
+│   │           ├── outline_in_room_reward.py    # outline 꼭짓점이 방 내부에 포함되는지 (케이스 B)
+│   │           ├── coverage_reward.py           # outline 내 빈공간 비율 (room_in_outline 쌍대)
+│   │           ├── connectivity_reward.py       # 헝가리안 + 후보 기반 satisfiability
 │   │           ├── count_reward.py
-│   │           ├── spatial_reward.py
+│   │           ├── spatial_reward.py            # 후보 기반 satisfiability
+│   │           ├── input_consistency_reward.py  # 입력 앵커 방 무게중심 일관성
 │   │           └── credit_assignment.py  # 토큰 수준 신용할당
 │   ├── inference/                  # 추론 모듈
 │   │   ├── model_loader.py         # Hub NF4 + partial_state.pt 주입 + LoRA adapter 스태킹
@@ -656,7 +660,7 @@ data/models/{model.name}/checkpoints/rl/{run_name}/
 - **Phase 0:** 파일 존재 확인 (partial_state.pt, SFT adapter, tokenizer, vocab_extension)
 - **Phase 1:** 모델 로드 + vocab_size 일치 + 멀티어댑터 구조 확인 (sft frozen, rl trainable)
 - **Phase 2:** N step 훈련 전후 rl 파라미터 갱신 + sft 파라미터 불변 확인
-- **Phase 3:** 보상함수 7개 계산 + vLLM 또는 HF generate 통합 생성 검증
+- **Phase 3:** 보상함수 9개 계산 + vLLM 또는 HF generate 통합 생성 검증
 
 ```bash
 # HF generate 모드 (vLLM 없이)
@@ -790,6 +794,11 @@ model:
 | `advantage.use_token_credit_assignment` | `true` | 토큰 수준 신용할당 전역 토글 |
 | `rewards.format.hard_gate` | `true` | R_format=0이면 모든 보상 0으로 강제 |
 | `rewards.no_overlap.weight` | `2.0` | 최고 가중치 보상 (겹침 없음) |
+| `rewards.room_in_outline.weight` | `1.5` | 비-outline 방 + front door가 outline 경계 내 포함되는지 (케이스 A, 신용할당 ON) |
+| `rewards.outline_in_room.weight` | `1.0` | outline 꼭짓점이 방 내부에 포함되는지 (케이스 B, 신용할당 ON) |
+| `rewards.coverage.weight` | `1.5` | outline 내 빈공간 없는지 (room_in_outline 쌍대, sequence-level) |
+| `rewards.input_consistency.weight` | `1.5` | 입력에 좌표 명시된 방(앵커+drop_type)이 출력에 일관되게 존재하는지 |
+| `rewards.input_consistency.threshold` | `15.0` | 무게중심 거리 임계값(px). 노이즈 3σ=9px + 모델 오차 마진 (transform 증강은 상대 오차 없음) |
 | `training.learning_rate` | `5e-6` | RL adapter 학습률 |
 | `training.optim` | `"paged_adamw_32bit"` | GPU OOM 방지 (momentum을 CPU RAM에 페이징) |
 | `data.max_completion_length` | `512` | 최대 completion 토큰 수 |
@@ -811,6 +820,8 @@ model:
 | `training.learning_rate` | `2e-4` | adapter 학습률 |
 | `training.num_train_epochs` | `3` | 훈련 에폭 수 |
 | `training.gradient_accumulation_steps` | `1` | 그래디언트 누적 steps |
+| `training.save_total_limit` | `null` | 보존할 체크포인트 최대 수 (`null` = 제한 없이 전체 보존) |
+| `training.load_best_model_at_end` | `true` | 훈련 종료 시 eval_loss 최고 체크포인트 복원 |
 | `training.max_steps` | `0` | 디버그용 step 제한 (0=비활성) |
 | `resume.enabled` | `false` | 계속 훈련 활성화 여부 |
 
