@@ -44,16 +44,15 @@ def compute_spatial_reward(
 ) -> float:
     """공간 관계 조건 충족도를 반환한다.
 
-    헝가리안 매칭(connectivity_reward와 동일)으로 입력-출력 방을 연결하고,
-    spatial 조건의 방향과 실제 무게중심 방향을 비교한다.
+    Mod Record: connectivity_reward와 동일하게 앵커 방은 헝가리안으로 결정 매핑하고,
+    자유 방(drop_coords/drop_type)은 후보 출력 방 집합으로 확장한 뒤 어떤 (a, b)
+    조합에서든 방향 조건이 만족되면 통과로 채점한다(satisfiability-based).
 
     Args:
         parsed: parse_output_tokens()의 반환값.
-        metadata: 입력 조건 메타데이터. 키:
-            - spatial (list[dict]): 공간 관계 조건.
-                [{rid_a, rid_b, direction}]
-            - rooms (list[dict]): 입력 방 정보.
-            - type_counts (dict[str, int]): 타입별 방 개수.
+        metadata: 모델 시점 메타데이터. 키:
+            - spatial (list[dict]): visible 공간 관계 조건. [{rid_a, rid_b, direction}]
+            - rooms (list[dict]): visible 방 정보 (자유 방은 type 또는 coords 마스킹).
 
     Returns:
         [0, 1] 범위. 방향 조건 충족 비율.
@@ -65,18 +64,21 @@ def compute_spatial_reward(
     if not spatial_conditions:
         return 1.0  # 공간 조건 없으면 만점
 
-    # 헝가리안 매칭 재사용 (connectivity_reward와 동일)
+    # 헝가리안 매칭 + 후보 탐색 헬퍼 재사용 (connectivity_reward에서 import)
     from src.training.rl.rewards.connectivity_reward import (
         _hungarian_match,
+        _get_candidate_output_indices,
         _compute_centroid_from_parsed,
     )
 
     rid_to_room_idx = _hungarian_match(parsed, metadata)
-    if not rid_to_room_idx:
-        return 0.0
 
     # outline 제외 출력 방 리스트
     output_rooms = [r for r in parsed.rooms if r.room_type != "outline"]
+    if not output_rooms:
+        return 0.0
+
+    input_rooms = metadata.get("rooms", [])
 
     satisfied = 0
     total = 0
@@ -89,44 +91,57 @@ def compute_spatial_reward(
         if rid_a is None or rid_b is None:
             continue
 
-        room_idx_a = rid_to_room_idx.get(rid_a)
-        room_idx_b = rid_to_room_idx.get(rid_b)
+        cands_a = _get_candidate_output_indices(rid_a, input_rooms, output_rooms, rid_to_room_idx)
+        cands_b = _get_candidate_output_indices(rid_b, input_rooms, output_rooms, rid_to_room_idx)
 
-        if room_idx_a is None or room_idx_b is None:
-            total += 1
-            continue
-
-        if room_idx_a >= len(output_rooms) or room_idx_b >= len(output_rooms):
-            total += 1
-            continue
-
-        room_a = output_rooms[room_idx_a]
-        room_b = output_rooms[room_idx_b]
-
-        cx_a, cy_a = _compute_centroid_from_parsed(room_a)
-        cx_b, cy_b = _compute_centroid_from_parsed(room_b)
-
-        # A → B 방향 벡터
-        dx = cx_b - cx_a
-        dy = cy_b - cy_a
-
-        if abs(dx) < 1e-9 and abs(dy) < 1e-9:
-            total += 1
-            continue
-
-        # 실제 방향 분류
-        # 이미지 좌표계 (y 아래로 증가)에서 아래 방향이 below
-        # atan2(dy, dx): dy>0이면 아래 방향
-        actual_dir = _vector_to_direction(dx, dy)
         total += 1
 
-        if actual_dir == expected_dir:
+        if not cands_a or not cands_b:
+            continue
+
+        # 어떤 (a, b) 조합에서든 방향 조건이 만족되면 통과
+        if _exists_direction_pair(cands_a, cands_b, output_rooms, expected_dir,
+                                   _compute_centroid_from_parsed):
             satisfied += 1
 
     if total == 0:
         return 1.0
 
     return satisfied / total
+
+
+def _exists_direction_pair(
+    cands_a: list[int],
+    cands_b: list[int],
+    output_rooms: list,
+    expected_dir: str,
+    centroid_fn,
+) -> bool:
+    """후보 인덱스 두 집합에서 expected_dir 방향을 만족하는 (a, b) 쌍 존재 여부.
+
+    Args:
+        cands_a: 첫 번째 RID 후보 출력 방 인덱스.
+        cands_b: 두 번째 RID 후보 출력 방 인덱스.
+        output_rooms: outline 제외 출력 방 리스트.
+        expected_dir: 기대 방향 (8방위 중 하나).
+        centroid_fn: ParsedRoom → (cx, cy) 함수.
+
+    Returns:
+        조건 만족 쌍이 존재하면 True.
+    """
+    for a_idx in cands_a:
+        cx_a, cy_a = centroid_fn(output_rooms[a_idx])
+        for b_idx in cands_b:
+            if a_idx == b_idx:
+                continue
+            cx_b, cy_b = centroid_fn(output_rooms[b_idx])
+            dx = cx_b - cx_a
+            dy = cy_b - cy_a
+            if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+                continue
+            if _vector_to_direction(dx, dy) == expected_dir:
+                return True
+    return False
 
 
 def _vector_to_direction(dx: float, dy: float) -> str:

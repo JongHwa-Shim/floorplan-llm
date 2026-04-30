@@ -35,7 +35,7 @@ inference:
   # 모든 adapter는 merge 없이 named adapter로 유지됨 (PEFT load_adapter API 사용)
   # 비어있으면 partial_state만 주입된 embed-align base model로 추론
   adapters: 
-    - path: "data/models/Qwen2.5-Coder-7B/checkpoints/sft/checkpoint-35133"
+    - path: "data/models/Qwen2.5-Coder-7B/checkpoints/sft/10epoch additional training using sft-lora-0424-first-begin(20epoch)/checkpoint-105399"
       name: "sft"
   # 예시:
   # pre-stasge 모델 사용 (빈 어댑터 리스트)
