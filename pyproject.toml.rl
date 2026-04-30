@@ -1,0 +1,41 @@
+[project]
+name = "floorplan-llm"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.11"
+dependencies = [
+    "hydra-core>=1.3.2",
+    "numpy>=2.4.2",
+    "omegaconf>=2.3.0",
+    "opencv-python-headless>=4.13.0.92",
+    "openpyxl>=3.1.5",
+    "orjson>=3.11.7",
+    "pillow>=12.1.1",
+    "torch>=2.6.0",
+    "transformers>=4.51.0",
+    "tqdm>=4.67.3",
+    "datasets>=4.6.1",
+    # Pre-Stage / SFT 훈련 의존성
+    "peft>=0.15.0",
+    "bitsandbytes>=0.45.0",
+    "accelerate>=1.6.0",
+    "wandb>=0.19.0",
+    # RL(GRPO) 훈련 의존성
+    "trl>=0.29.0",
+    "shapely>=2.0.0",
+    "scipy>=1.14.0",
+    "vllm>=0.19.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+# numba 0.61.2가 numpy<2.3을 요구하지만, 실제 런타임에서 numpy 2.x와 호환됨
+# uv 해결 충돌 우회를 위해 numba의 numpy 상한 제약을 override
+# numba, mistral-common 등 vllm 의존성이 numpy<2.4 를 요구하나
+# 실제로 numpy 2.x와 런타임 호환됨 — uv 해결 충돌만 우회
+[tool.uv]
+override-dependencies = [
+    "numpy>=2.4.2",
+]

@@ -48,7 +48,10 @@ data:
 
 distributed:
   # 사용할 GPU 수. 1이면 단일 GPU 모드, 2 이상이면 torchrun DDP로 자동 전환
-  nproc_per_node: 1
+  # Mod Record: PyTorch 2.10 + bitsandbytes NF4 + DDP 조합에서 _verify_param_shape_across_processes
+  # 단계에서 OOM 발생(24GB GPU 기준). mean_resizing/broadcast_buffers 비활성화로도 해결 안 됨.
+  # 단일 GPU로 임시 전환. RL 마무리 후 PyTorch/bitsandbytes 호환 버전 재정비 필요.
+  nproc_per_node: 2
 
 resume:
   enabled: false
@@ -56,7 +59,7 @@ resume:
   auto_find_latest: true
 
 training:
-  num_train_epochs: 3
+  num_train_epochs: 30
   per_device_train_batch_size: 8
   per_device_eval_batch_size: 2
   gradient_accumulation_steps: 1      # GPU 2대 DDP: 실효배치 = GPU 개수 × batch 개수 × accum 개수
@@ -71,7 +74,7 @@ training:
   logging_steps: 10
   report_to: "wandb"
   project_name: "floorplan-llm"
-  run_name: "floorplan-sft"
+  run_name: "10epoch additional training using sft-lora-0424-first-begin(20epoch)"
   seed: 42
   # 체크포인트 최대 보존 수 (null = 제한 없이 전체 보존)
   save_total_limit: null

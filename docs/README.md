@@ -248,6 +248,10 @@ sudo apt-get update && sudo apt-get install -y gcc python3.12-dev
 | `hydra-core >= 1.3.2` | 설정 관리 |
 | `omegaconf >= 2.3.0` | YAML 파싱 + 보간 |
 | `orjson >= 3.11.7` | 고속 JSON 직렬화 |
+| `trl >= 0.29.0` | RL(GRPO) 훈련 |
+| `vllm >= 0.19.0` | RL rollout 생성 (colocate) |
+
+> **WSL2 + PyTorch 2.10 + NCCL 2.27.5 환경 주의:** vLLM 의존성으로 인해 PyTorch가 2.10(cu128)으로 끌려오면, NCCL의 P2P/SHM 통신 회귀 버그로 DDP 초기화 단계에서 `ncclUnhandledCudaError "out of memory"`가 발생한다. `scripts/training/run_*.py`에서 `NCCL_P2P_DISABLE=1` / `NCCL_SHM_DISABLE=1` / `NCCL_IB_DISABLE=1` 및 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`를 자동 설정하여 SOCKET 통신과 가상 주소 점진 확장으로 우회한다 (성능 손실 무시 가능). 자세한 내용은 [Docs.md의 DDP 섹션](Docs.md#ddp-data-parallel-지원)을 참고.
 
 ---
 

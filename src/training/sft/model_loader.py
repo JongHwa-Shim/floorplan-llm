@@ -84,7 +84,12 @@ def load_base_model_with_partial_state(
     )
 
     # vocab 크기 확장: 커스텀 토큰을 수용하도록 embed_tokens / lm_head 행 추가
-    model.resize_token_embeddings(len(tokenizer))
+    # Mod Record: transformers 5.x에서 mean_resizing=True(기본값)가 기존 embedding matrix를
+    # GPU에 float32로 복사해 공분산 계산 → embed_tokens + lm_head 각각 ~2GB씩 임시 텐서 생성.
+    # 어차피 partial_state.pt로 새 토큰 행을 덮어쓰므로 초기화 방식 무관 → False로 비활성화.
+    model.resize_token_embeddings(len(tokenizer), mean_resizing=False)
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     logger.info(f"vocab 확장 완료. vocab_size: {model.config.vocab_size}")
 
     # partial_state.pt 로드하여 커스텀 토큰 행에 Embedding Alignment 훈련된 가중치 주입

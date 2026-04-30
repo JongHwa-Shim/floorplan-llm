@@ -775,7 +775,8 @@ Embedding Alignment 워밍업 이후, LoRA(Low-Rank Adaptation)를 통해 Transf
        dtype=torch.bfloat16,
        # device_map="auto" 미사용: DDP와 호환되지 않음 (model parallelism vs data parallelism 충돌)
    )
-   → resize_token_embeddings(len(tokenizer))으로 vocab 확장
+   → resize_token_embeddings(len(tokenizer), mean_resizing=False)으로 vocab 확장
+   → mean_resizing=False: transformers 5.x의 multivariate normal 초기화(GPU에 fp32 임시 텐서 ~2GB×2 생성)를 비활성화. partial_state.pt로 새 토큰 행을 곧바로 덮어쓰므로 초기화 방식 무관.
 
 3. partial_state.pt 로드 → embed_tokens / lm_head의 new_token_ids 행에 훈련된 가중치 직접 주입
    → 4bit 양자화 대상이 아닌 bf16 레이어이므로 torch.no_grad()로 직접 index 접근 가능
@@ -842,6 +843,19 @@ Embedding Alignment와 SFT 모두 DDP를 지원한다. `distributed.nproc_per_no
 - `_save_checkpoint`: `is_world_process_zero()` 가드로 rank 0만 `partial_state.pt` 저장
 - `_save_checkpoint` / `_load_from_checkpoint` / `_load_best_model`: DDP 래퍼(`DistributedDataParallel`) 내부 실제 모델에 `.module`으로 접근
 - 최종 저장 시: `trainer.accelerator.unwrap_model(trainer.model)`로 언래핑 후 `partial_state.pt` / adapter 저장 (`is_main_process` 가드)
+
+**환경 호환성 패치 (PyTorch 2.10 + cu128 + bitsandbytes 0.49 + WSL2):**
+
+RL 단계 도입으로 vLLM 의존성에 끌려 PyTorch가 2.6(cu124) → 2.10(cu128)로, transformers가 4.x → 5.x로 자동 업그레이드되면서 SFT/Embedding Alignment에서 다음 회귀가 발생한다. `scripts/training/run_*.py` 진입부와 `model_loader.py` / `trainer.py`에 우회 패치를 적용했다.
+
+| 증상 | 원인 | 패치 |
+|------|------|------|
+| DDP 초기화 `_verify_param_shape_across_processes`에서 `ncclUnhandledCudaError "out of memory"` | NCCL 2.27.5 + WSL2에서 P2P/SHM 통신 경로 회귀 버그. `/dev/shm` 크기와 무관하게 SHM 채널이 깨짐 | `run_*.py` 상단에서 `NCCL_P2P_DISABLE=1` / `NCCL_SHM_DISABLE=1` / `NCCL_IB_DISABLE=1` 환경변수 설정 → SOCKET 통신 강제. 단일 머신 2-GPU에서 throughput 손실 거의 없음 |
+| 학습 step 도중 OOM (예: 19.45GB 할당 + 1.79GB unallocated reserved + 3.74GB 신규 요청 → fail) | PyTorch 2.10의 cudaMalloc 파편화 누적 | `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` 환경변수 설정 (가상 주소 공간 점진 확장) |
+| `resize_token_embeddings` 호출 시 GPU에 ~2GB 임시 텐서 생성 (embed_tokens + lm_head 합산 ~4GB) | transformers 5.x에서 `mean_resizing=True`(기본값)가 기존 embedding matrix를 fp32로 GPU 복사하여 multivariate normal 공분산 계산 | `model_loader.py`의 `resize_token_embeddings(..., mean_resizing=False)` + 직후 `torch.cuda.empty_cache()`. partial_state.pt로 새 토큰 행을 어차피 덮어쓰므로 초기화 방식 무관 |
+| DDP 초기화 시 NF4 quantized buffer까지 NCCL로 rank간 브로드캐스트하여 추가 메모리 점유 | `broadcast_buffers=True`(기본값)가 frozen NF4 buffer까지 동기화 | `trainer.py`에 `ddp_broadcast_buffers=False` 추가 (각 rank가 동일 weight를 독립 로드하므로 동기화 불필요) |
+
+> 환경변수는 `os.environ.setdefault()`로 박혀 외부에서 override 가능하다. 향후 NCCL/PyTorch 호환 버전이 안정화되면 제거 검토.
 
 **실행:**
 ```bash
