@@ -176,6 +176,16 @@ def load_model_and_tokenizer(cfg: DictConfig) -> tuple:
             param.requires_grad_(False)
     logger.info("멀티 어댑터 활성화 완료: sft(frozen) + rl(trainable)")
 
+    # Mod Record: TRL GRPOTrainer.__init__은 beta != 0.0일 때
+    # `model.add_adapter("ref", model.peft_config["default"])`를 호출해 KL용 ref adapter를
+    # 자동 생성한다. 우리 모델은 adapter_name이 sft/rl이라 default 키가 없어 KeyError 발생.
+    # SFT adapter의 LoraConfig를 default 키에 alias로 등록해 TRL의 ref 생성 경로를 통과시킨다.
+    # (가중치 복사는 RLTrainer.__init__에서 .sft. → .ref. 로 직접 수행 — TRL 기본 코드는
+    #  .default. 매칭만 하므로 우리 구조에서 누락됨)
+    if "default" not in model.peft_config:
+        model.peft_config["default"] = model.peft_config["sft"]
+        logger.info("TRL ref adapter 호환을 위해 peft_config['default']=peft_config['sft'] alias 등록")
+
     # Mod Record: add_adapter()가 새 Linear 모듈을 float32로 초기화하고,
     # PeftModel.from_pretrained으로 로드한 SFT adapter 가중치와 attention bias도
     # float32로 유지될 수 있다. NF4 양자화 파라미터(Params4bit)를 제외한

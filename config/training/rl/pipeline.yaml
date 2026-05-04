@@ -7,8 +7,8 @@ model:
   user: "Qwen"
   name: "Qwen2.5-Coder-7B"
   hub_id: "${model.user}/${model.name}"                                              # HF Hub 전체 경로
-  embed_align_dir: "data/models/${model.name}/checkpoints/embed_align/final"             # partial_state.pt 위치
-  sft_adapter_dir: "data/models/${model.name}/checkpoints/sft/final"                 # SFT adapter 위치 (frozen)
+  embed_align_dir: "data/models/Qwen2.5-Coder-7B/final_checkpoints/embed_align"             # partial_state.pt 위치
+  sft_adapter_dir: "data/models/Qwen2.5-Coder-7B/final_checkpoints/sft/10epoch additional training using sft-lora-0424-first-begin(20epoch)/checkpoint-105399"                 # SFT adapter 위치 (frozen)
   tokenizer_dir: "data/models/${model.name}/tokenization"                            # 확장 토크나이저 경로
   vocab_extension: "${model.tokenizer_dir}/vocab_extension.json"
 
@@ -46,7 +46,7 @@ data:
 
 distributed:
   # 사용할 GPU 수. 1이면 단일 GPU 모드, 2 이상이면 torchrun DDP로 자동 전환
-  nproc_per_node: 2
+  nproc_per_node: 1
 
 resume:
   enabled: false
@@ -85,12 +85,16 @@ rl:
   clip_range: 0.2                       # PPO 클리핑 엡실론
   num_iterations: 2                     # roll-out 재활용 횟수
 
-  # vLLM 설정 (colocate 모드 기본값)
-  # Mod Record: NF4 훈련 모델과 vLLM 모델 간 분포 차이는 IS correction이 보정.
-  # colocate 모드: 각 DDP rank가 자기 GPU에서 vLLM을 동시 실행 → 병렬 rollout 생성.
-  # gpu_memory_utilization=0.45: RTX 3090 24GB 기준. 24×0.45=10.8GB를 vLLM KV cache에 할당.
-  use_vllm: true
-  vllm_mode: "colocate"                 # "colocate" (기본) 또는 "server" (3 GPU 이상 환경)
+  # vLLM 설정 (기본 비활성화 — 아래 Mod Record 참고)
+  # Mod Record: NF4 base + LoRA 환경에서 vLLM colocate가 수치적으로 발산함을 확인.
+  # PEFT의 NF4 LoRA merge는 sync 시 dequant→add→re-quantize 라운드 트립을 수행하는데,
+  # 4bit 재양자화 손실(peft/tuners/lora/bnb.py:397에서 "rounding errors" 경고)이 매 step
+  # 누적되어 vLLM 정책과 훈련 정책 간 토큰 logprob 차이가 폭증한다. 결과: importance
+  # sampling ratio 붕괴(~e-26) + K3 KL 추정자 폭주(1e+26+) → loss 발산 + grad NaN.
+  # 따라서 NF4 환경에서는 HF generate가 안정적이며 200~300 토큰 시퀀스에서 더 빠름.
+  # vLLM은 bf16 base + 긴 시퀀스(≥1024) + 멀티 GPU 환경에서만 의미 있음.
+  use_vllm: false
+  vllm_mode: "colocate"                 # "colocate" 또는 "server" (3 GPU 이상 환경)
   vllm_gpu_memory_utilization: 0.45    # RTX 3090 24GB 기준. OOM 시 0.4로 낮춤
   vllm_enable_sleep_mode: false        # CPU 오프로드 없음 → rollout↔훈련 전환 지연 없음
   vllm_tensor_parallel_size: 1         # 각 DDP rank가 자기 GPU 1개 단독 사용
