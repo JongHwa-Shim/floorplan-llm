@@ -432,51 +432,67 @@ def _test_gdpo_normalization() -> list[str]:
 
 
 def _test_credit_assignment() -> list[str]:
-    """토큰 신용할당 수치 검증."""
+    """토큰 신용할당 4-cell 수치 검증 (옵션 F: Sign-Asymmetric).
+
+    수식: a_t = A * [1 + sign(A) * (alpha*(1-m) - beta*m)] - kappa * m
+    """
     import torch
     from src.training.rl.rewards.credit_assignment import (
         build_error_mask,
         apply_token_credit_assignment,
     )
     errors = []
+    alpha, beta, kappa = 0.2, 0.5, 1.0
 
     try:
-        # A=2.0 (양수 advantage), mask[2]=1 (오류 토큰)
+        # 4-cell #1: A>0, 정상 토큰 = A(1+alpha) = 2.0 * 1.2 = 2.4
+        # 4-cell #2: A>0, 오류 토큰 = A(1-beta) - kappa = 2.0 * 0.5 - 1.0 = 0.0
         seq_len = 5
         error_mask = build_error_mask(seq_len, error_indices=[2])
         token_A = apply_token_credit_assignment(
-            advantage=2.0,
-            error_mask=error_mask,
-            penalty_scale=1.5,
+            advantage=2.0, error_mask=error_mask,
+            nominal_gain=alpha, faulty_attenuation=beta, penalty_offset=kappa,
         )
-
-        # 정상 토큰: A=2.0
         for i in [0, 1, 3, 4]:
-            if abs(token_A[i].item() - 2.0) > 1e-5:
-                errors.append(f"신용할당: 정상 토큰[{i}]={token_A[i].item()} (기대: 2.0)")
+            if abs(token_A[i].item() - 2.4) > 1e-5:
+                errors.append(f"신용할당 A>0 정상 토큰[{i}]={token_A[i].item()} (기대: 2.4)")
+        if abs(token_A[2].item() - 0.0) > 1e-5:
+            errors.append(f"신용할당 A>0 오류 토큰[2]={token_A[2].item()} (기대: 0.0)")
 
-        # 오류 토큰[2]: -|A| × penalty = -2.0 × 1.5 = -3.0
-        expected_err = -2.0 * 1.5
-        if abs(token_A[2].item() - expected_err) > 1e-5:
-            errors.append(f"신용할당: 오류 토큰[2]={token_A[2].item()} (기대: {expected_err})")
-
-        # A=-1.5 (음수 advantage), mask[1]=1
+        # 4-cell #3: A<0, 정상 토큰 = A(1-alpha) = -1.5 * 0.8 = -1.2 (가벼운 벌)
+        # 4-cell #4: A<0, 오류 토큰 = A(1+beta) - kappa = -1.5 * 1.5 - 1.0 = -3.25 (더 센 벌)
         error_mask2 = build_error_mask(seq_len, error_indices=[1])
         token_A2 = apply_token_credit_assignment(
-            advantage=-1.5,
-            error_mask=error_mask2,
-            penalty_scale=2.0,
+            advantage=-1.5, error_mask=error_mask2,
+            nominal_gain=alpha, faulty_attenuation=beta, penalty_offset=kappa,
         )
-
-        # 오류 토큰[1]: -|-1.5| × 2.0 = -3.0 (A가 음수여도 항상 음수 방향 페널티)
-        expected_err2 = -1.5 * 2.0
+        expected_innocent = -1.5 * (1.0 - alpha)
+        if abs(token_A2[0].item() - expected_innocent) > 1e-5:
+            errors.append(
+                f"신용할당 A<0 정상 토큰[0]={token_A2[0].item()} (기대: {expected_innocent})"
+            )
+        expected_err2 = -1.5 * (1.0 + beta) - kappa
         if abs(token_A2[1].item() - expected_err2) > 1e-5:
             errors.append(
-                f"신용할당: 음수 A, 오류 토큰[1]={token_A2[1].item()} (기대: {expected_err2})"
+                f"신용할당 A<0 오류 토큰[1]={token_A2[1].item()} (기대: {expected_err2})"
             )
 
+        # 4-cell #5: A=0 케이스 — 오류 토큰에 -kappa 보장 (페널티 소실 결함 회귀 가드)
+        error_mask3 = build_error_mask(seq_len, error_indices=[3])
+        token_A3 = apply_token_credit_assignment(
+            advantage=0.0, error_mask=error_mask3,
+            nominal_gain=alpha, faulty_attenuation=beta, penalty_offset=kappa,
+        )
+        if abs(token_A3[3].item() - (-kappa)) > 1e-5:
+            errors.append(
+                f"신용할당 A=0 오류 토큰[3]={token_A3[3].item()} (기대: {-kappa})"
+            )
+        for i in [0, 1, 2, 4]:
+            if abs(token_A3[i].item() - 0.0) > 1e-5:
+                errors.append(f"신용할당 A=0 정상 토큰[{i}]={token_A3[i].item()} (기대: 0.0)")
+
         if not errors:
-            logger.info("  [OK] 토큰 신용할당 수치 검증 (양수/음수 advantage)")
+            logger.info("  [OK] 토큰 신용할당 4-cell 수치 검증 (A>0, A<0, A=0)")
     except Exception as e:
         errors.append(f"신용할당 예외: {e}")
 

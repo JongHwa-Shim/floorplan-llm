@@ -301,21 +301,25 @@ def make_reward_cfg(
     enable: list[str] | None = None,
     weights: dict[str, float] | None = None,
     credit_assignment: dict[str, bool] | None = None,
-    penalty_scale: dict[str, float] | None = None,
+    nominal_gain: dict[str, float] | None = None,
+    faulty_attenuation: dict[str, float] | None = None,
+    penalty_offset: dict[str, float] | None = None,
     threshold: float | None = None,
     hard_gate: bool = True,
 ) -> DictConfig:
-    """검증용 reward_cfg DictConfig를 만든다.
+    """검증용 reward_cfg DictConfig를 만든다 (옵션 F 파라미터 사용).
 
     기본은 모든 보상 비활성, format은 항상 활성 (Hard Gate 통과 위해).
-    enable에 명시한 보상만 추가 활성화. credit_assignment / penalty_scale은
-    enable된 보상 중 신용할당 가능한 보상에만 적용.
+    enable에 명시한 보상만 추가 활성화. 신용할당 파라미터(nominal_gain /
+    faulty_attenuation / penalty_offset)는 enable된 보상에만 적용된다.
 
     Args:
         enable: 활성화할 보상 이름 리스트 (format 자동 포함).
         weights: 보상명 → 가중치.
         credit_assignment: 보상명 → 신용할당 ON/OFF.
-        penalty_scale: 보상명 → 페널티 배율.
+        nominal_gain: 보상명 → alpha (정상 토큰 신용 이득 계수).
+        faulty_attenuation: 보상명 → beta (오류 토큰 신용 감쇄 계수).
+        penalty_offset: 보상명 → kappa (절대 페널티 오프셋).
         threshold: input_consistency 전용 (px).
         hard_gate: format Hard Gate 의미적 표시 (현재 코드는 항상 작동).
 
@@ -327,7 +331,9 @@ def make_reward_cfg(
         enable = ["format"] + enable
     weights = weights or {}
     credit_assignment = credit_assignment or {}
-    penalty_scale = penalty_scale or {}
+    nominal_gain = nominal_gain or {}
+    faulty_attenuation = faulty_attenuation or {}
+    penalty_offset = penalty_offset or {}
 
     cfg_dict: dict[str, Any] = {}
     for name in ALL_REWARD_NAMES:
@@ -336,7 +342,9 @@ def make_reward_cfg(
             "enabled": is_enabled,
             "weight": float(weights.get(name, 1.0)),
             "credit_assignment": bool(credit_assignment.get(name, False)),
-            "penalty_scale": float(penalty_scale.get(name, 1.0)),
+            "nominal_gain": float(nominal_gain.get(name, 0.0)),
+            "faulty_attenuation": float(faulty_attenuation.get(name, 0.0)),
+            "penalty_offset": float(penalty_offset.get(name, 0.0)),
         }
         if name == "input_consistency" and threshold is not None:
             item["threshold"] = float(threshold)

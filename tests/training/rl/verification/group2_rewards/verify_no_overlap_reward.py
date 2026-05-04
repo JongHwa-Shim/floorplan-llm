@@ -51,7 +51,7 @@ def runner(case: Case) -> None:
     cfg = make_reward_cfg(
         enable=["no_overlap"],
         credit_assignment={"no_overlap": True},
-        penalty_scale={"no_overlap": 1.0},
+        penalty_offset={"no_overlap": 1.0},
     )
     fd = FrontDoorSpec(cx=105, cy=10, w=8, h=2)
     metadata = build_metadata(total_rooms=len(case.rooms) - 1, type_counts={})

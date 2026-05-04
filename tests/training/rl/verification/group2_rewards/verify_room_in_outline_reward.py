@@ -54,7 +54,7 @@ def runner(case: Case) -> None:
     cfg = make_reward_cfg(
         enable=["room_in_outline"],
         credit_assignment={"room_in_outline": True},
-        penalty_scale={"room_in_outline": 1.0},
+        penalty_offset={"room_in_outline": 1.0},
     )
     metadata = build_metadata(total_rooms=len(case.rooms) - 1, type_counts={})
 

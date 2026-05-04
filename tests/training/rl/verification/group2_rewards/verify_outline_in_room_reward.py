@@ -50,7 +50,7 @@ def runner(case: Case) -> None:
     cfg = make_reward_cfg(
         enable=["outline_in_room"],
         credit_assignment={"outline_in_room": True},
-        penalty_scale={"outline_in_room": 1.0},
+        penalty_offset={"outline_in_room": 1.0},
     )
     fd = FrontDoorSpec(cx=10, cy=5, w=4, h=2)
     metadata = build_metadata(total_rooms=len(case.rooms) - 1, type_counts={})

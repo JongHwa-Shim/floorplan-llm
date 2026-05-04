@@ -841,6 +841,9 @@ model:
 | `rewards.coverage.weight` | `1.5` | outline 내 빈공간 없는지 (room_in_outline 쌍대, sequence-level) |
 | `rewards.input_consistency.weight` | `1.5` | 입력에 좌표 명시된 방(앵커+drop_type)이 출력에 일관되게 존재하는지 |
 | `rewards.input_consistency.threshold` | `15.0` | 무게중심 거리 임계값(px). 노이즈 3σ=9px + 모델 오차 마진 (transform 증강은 상대 오차 없음) |
+| `rewards.<name>.nominal_gain` | (보상별) | 옵션 F α: 정상 토큰 신용 이득 계수, [0, 1) |
+| `rewards.<name>.faulty_attenuation` | (보상별) | 옵션 F β: 오류 토큰 신용 감쇄 계수, [0, 1) (A>0 감쇄, A<0 증폭) |
+| `rewards.<name>.penalty_offset` | (보상별) | 옵션 F κ: advantage와 무관한 절대 페널티 오프셋, [0, ∞) |
 | `training.learning_rate` | `5e-6` | RL adapter 학습률 |
 | `training.optim` | `"paged_adamw_32bit"` | GPU OOM 방지 (momentum을 CPU RAM에 페이징) |
 | `data.max_completion_length` | `512` | 최대 completion 토큰 수 |

@@ -81,7 +81,7 @@ def build_cases() -> list[Case]:
     cfg_format = make_reward_cfg(
         enable=["format"],
         credit_assignment={"format": True},
-        penalty_scale={"format": 1.0},
+        penalty_offset={"format": 1.0},
     )
     metadata = build_metadata(total_rooms=1, type_counts={"bedroom": 1})
 

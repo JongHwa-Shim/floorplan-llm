@@ -912,12 +912,38 @@ $$A^{(i)} = \sum_{k=1}^{K} w_k \cdot A_k^{(i)}$$
 
 포맷 파싱 실패 시 geometry/connectivity 보상이 의미 없으므로 강제 0.
 
-**4. 토큰 수준 신용할당 (적용 대상: format, orthogonality, no_overlap, room_in_outline, outline_in_room)**
+**4. 토큰 수준 신용할당 (옵션 F: Sign-Asymmetric Credit Assignment with Penalty Offset)**
 
-$$a_t = A \cdot (1 - m_t) - |A| \cdot \lambda \cdot m_t$$
+적용 대상: format, orthogonality, no_overlap, room_in_outline, outline_in_room.
+
+$$a_t = A \cdot \bigl[1 + \mathrm{sign}(A) \cdot \bigl(\alpha (1 - m_t) - \beta m_t\bigr)\bigr] - \kappa \cdot m_t$$
+
+조건별 전개:
+- 정상 토큰 ($m_t = 0$): $a_t = A(1 + \alpha \cdot \mathrm{sign}(A))$
+- 오류 토큰 ($m_t = 1$): $a_t = A(1 - \beta \cdot \mathrm{sign}(A)) - \kappa$
+
+| 기호 | 코드 변수명 | 의미 | 범위 |
+|------|-----------|------|------|
+| $\alpha$ | `nominal_gain` | 정상 토큰 신용 이득 계수 | $[0, 1)$ |
+| $\beta$ | `faulty_attenuation` | 오류 토큰 신용 감쇄 계수 (A>0 magnitude 감쇄, A<0 magnitude 증폭) | $[0, 1)$ |
+| $\kappa$ | `penalty_offset` | $A$와 무관한 절대 페널티 오프셋 | $[0, \infty)$ |
+
+설계 의도 (4-cell):
+
+| | **정상 토큰** ($m_t=0$) | **오류 토큰** ($m_t=1$) |
+|---|---|---|
+| $A > 0$ | $A(1+\alpha) \geq A$ (더 큰 상) | $A(1-\beta) - \kappa < A$ (작은 상 또는 벌) |
+| $A \approx 0$ | $0$ (변화 없음) | $-\kappa$ (보장된 벌) |
+| $A < 0$ | $A(1-\alpha)$ (가벼운 벌, magnitude 축소) | $A(1+\beta) - \kappa$ (더 센 벌, magnitude 증폭) |
 
 - $m_t$: 오류 토큰 마스크 (파싱 실패 위치, 직각 위반 꼭지점, 겹침 발생 방 토큰, outline 벗어난 방/front door 토큰)
-- 정상 토큰: 어드밴티지 $A$ 그대로. 오류 토큰: 방향 페널티 추가.
+- $\mathrm{sign}(0) = 0$ 정의에 따라 $A = 0$일 때 정상/오류 모두 magnitude 변형 항이 자동 소멸하고, 오류 토큰에는 $-\kappa$만 남는다.
+
+**옵션 F 채택 근거 (이전 수식 $a_t = A(1-m_t) - |A|\lambda m_t$의 결함):**
+
+이전 수식은 페널티 magnitude가 $|A|$에 곱셈으로 묶여있어, GDPO 그룹 정규화 후 그룹 평균에 가까운 시퀀스($|A| \to 0$)에서 오류 토큰 페널티가 함께 소실되는 문제가 있었다. 이는 "오류 토큰 = 절대적 violation"이라는 신용할당의 기본 철학과 충돌한다. 옵션 F는 (1) 정상 토큰의 magnitude도 $\alpha$로 조정하여 비대칭 차등을 명확히 하고, (2) advantage와 무관한 절대 페널티 $\kappa$를 추가하여 $|A| = 0$ 케이스에서도 페널티를 보장한다.
+
+옵션 F는 GDPO의 1단계 그룹 정규화(critic 대체, 척도 통일, 변동 감소)는 그대로 보존하며, 2단계 토큰 분배에서만 시퀀스 평균이 토큰 분포에 의존하게 된다. 이 부수효과는 [_batch_normalize](../src/training/rl/advantage.py#L184)의 시퀀스 대표값 기반 batch 정규화로 흡수되어 학습 안정성에 거의 영향이 없다.
 
 **5. 배치 정규화 (시퀀스 대표값 기반)**
 
