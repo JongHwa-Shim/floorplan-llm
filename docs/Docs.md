@@ -1021,9 +1021,44 @@ $$s_r = \max\!\left(0, 1 - \frac{d_r}{\tau}\right) \quad,\quad R_{\text{input\_c
 
 `R_input_consistency`는 앵커 방(결정 매핑)과 drop_type 방(타입 무관 헝가리안, 잔여 출력 방 대상)만 해당하므로 satisfiability 후보 확장은 사용하지 않는다.
 
-#### vLLM Colocate 통합
+#### vLLM Colocate 통합 (현재 비활성, NF4 환경 부적합)
 
-**아키텍처 (RTX 3090×2, DDP 2-GPU):**
+**현 상태:** `rl.use_vllm=false`가 기본값. 우리 환경(NF4 base + LoRA + 200~300 토큰 시퀀스)에서는 vLLM colocate가 수치적으로 발산하므로 HF generate를 사용한다. vLLM은 bf16 base + 긴 시퀀스(≥1024) + 멀티 GPU 환경에서만 의미 있다.
+
+**왜 NF4에서 발산하는가 (검증 결과 2026-05-05):**
+
+[peft/tuners/lora/bnb.py:393-422](../.venv/lib/python3.11/site-packages/peft/tuners/lora/bnb.py#L393-L422)의 `Linear4bit` LoRA merge 구현은 다음 round-trip을 수행한다:
+
+```
+merge:   NF4(W) → bf16 dequant → bf16 + B·A → bf16 → NF4 재양자화 → base_layer.weight 덮어쓰기
+unmerge: NF4(W_merged) → bf16 dequant → bf16 - B·A → bf16 → NF4 재양자화 → 원본 복원 시도
+```
+
+PEFT 자체가 line 397, 446에서 *"may get different generations due to rounding errors"* 라고 경고하는 부분이다. NF4는 lookup table 16개 값으로 양자화하므로 4bit 재양자화 손실이 매우 크다. 매 step `sync_weights()`에서 두 번씩 round-trip이 일어나 (a) vLLM이 보는 가중치와 훈련 forward가 사용하는 가중치가 어긋나고 (b) 훈련 base 자체가 step마다 부식된다.
+
+**관측된 발산 패턴 (단일 GPU, num_generations=2, max_steps=20 기준):**
+
+| step | sampling_logp_difference/mean | importance_sampling_ratio/mean | KL |
+|------|------------------------------|-------------------------------|----|
+| 1 | 0.22 | 2.86e-08 | 0.027 (정상) |
+| 3 | 0.47 | ~e-10 | 0.33 |
+| 5 | — | 0 | 2.48e+7 |
+| 10 | — | 0 | 4.04e+16 |
+| 15+ | 1.36~2.52 | 0 | inf/nan |
+
+→ IS ratio 붕괴(보정 한계 초과) + K3 KL 추정자의 `exp` 항이 outlier 토큰에서 폭주 → loss/grad inf/nan.
+
+**같은 조건의 HF generate 모드는 안정 (train_loss=0.019 정상 종료).** rollout 생성 모델 = logp 계산 모델 = 훈련 모델이라 round-trip 자체가 발생하지 않는다. 시간도 단일 GPU 200~300 토큰 시퀀스에서는 HF가 약 1.6× 빠르다(454.2s vs 280.6s, 20 step 기준) — vLLM `merge_adapter` + `sync_weights` 오버헤드가 throughput 이점을 상쇄.
+
+**vLLM colocate가 의미 있는 환경:**
+
+| 조건 | 이유 |
+|------|------|
+| bf16 base + LoRA | bf16 merge는 lossless. round-trip 손실 없음. |
+| fp16/bf16 full FT | merge 자체가 없음 (LoRA가 없으니). |
+| 긴 시퀀스 (≥1024) + 멀티 GPU | vLLM PagedAttention 처리량이 sync 오버헤드를 압도. |
+
+**(참고) 원래 구상했던 아키텍처:**
 
 ```
 GPU 0 (rank 0)                        GPU 1 (rank 1)
@@ -1036,24 +1071,7 @@ GPU 0 (rank 0)                        GPU 1 (rank 1)
      ↕ DDP gradient sync
 ```
 
-- **rollout 생성:** 두 GPU가 각자 local batch를 동시에 생성 (완전 병렬)
-- **가중치 동기화:** step마다 `merge_adapter()` → `llm.load_weights()` (in-process 메모리 복사) → `unmerge_adapter()`
-- **`gpu_memory_utilization=0.45`:** RTX 3090 24GB 기준. 24×0.45=10.8GB를 vLLM KV cache에 할당
-
-**VRAM 레이아웃 (GPU당, RTX 3090 24GB):**
-```
-NF4 훈련 모델          ~4 GB
-vLLM NF4 모델         ~4 GB  ┐
-vLLM KV cache         ~6 GB  ┘ gpu_memory_utilization=0.45 → 10.8GB 할당
-optimizer (paged)     ~0.5GB
-gradient checkpoint   ~3 GB
-여유                  ~6 GB
-────────────────────────────
-합계                  ~23.5GB
-```
-
-**HF generate 모드 (디버그용):**
-`rl.use_vllm=false`로 전환 시 vLLM 없이 `model.generate()`로 rollout 생성. VRAM 절약. 단, 512 토큰 이하 시퀀스에서는 HF generate가 더 빠름 (vLLM `merge_adapter` + `sync_weights` 오버헤드 5–10초/step 대비 이점 없음).
+`rl.use_vllm=true`로 활성화하면 위 구조로 동작은 가능하지만 NF4 환경에서는 학습이 발산한다. bf16 base로 전환할 때만 유효한 옵션.
 
 #### 구현 노트 (핵심 버그 이력)
 

@@ -623,19 +623,23 @@ uv run python tests/training/sft/validate_sft.py \
 
 ### RL (GRPO): GDPO 강화학습
 
-HF Hub base model + partial_state.pt + SFT adapter(frozen) + RL adapter(trainable) 멀티어댑터 구조로 GDPO + 토큰 수준 신용할당 강화학습을 수행한다. vLLM colocate 모드로 각 DDP rank 내에서 병렬 rollout을 생성한다.
+HF Hub base model + partial_state.pt + SFT adapter(frozen) + RL adapter(trainable) 멀티어댑터 구조로 GDPO + 토큰 수준 신용할당 강화학습을 수행한다. 롤아웃은 기본적으로 HF generate로 생성한다.
+
+> **vLLM colocate 비활성 사유:** NF4 base + LoRA 환경에서 PEFT의 sync 단계 4bit merge round-trip 손실이 누적되어 vLLM 정책과 훈련 정책 logprob 차이가 폭증하고, IS ratio 붕괴 + KL 추정자 폭주로 학습이 발산한다 (자세한 내용은 [Docs.md의 vLLM 섹션](Docs.md#vllm-colocate-통합)). bf16 base + 긴 시퀀스 + 멀티 GPU 환경에서만 `rl.use_vllm=true`로 켜는 것을 권장한다.
 
 ```bash
-# DDP 2-GPU (기본: vLLM colocate 모드)
-uv run torchrun --nproc_per_node=2 scripts/training/run_rl.py
-
-# 단일 GPU
+# 단일 GPU 또는 DDP 자동 (distributed.nproc_per_node로 제어)
 uv run python scripts/training/run_rl.py
 
-# 디버그 (10 step, vLLM 비활성화 → HF generate 사용, W&B 비활성화)
+# DDP 명시 (torchrun 직접 호출)
+uv run torchrun --nproc_per_node=2 scripts/training/run_rl.py
+
+# 디버그 (10 step, W&B 비활성화)
 uv run python scripts/training/run_rl.py \
-    training.max_steps=10 training.report_to=none \
-    rl.use_vllm=false
+    training.max_steps=10 training.report_to=none
+
+# vLLM colocate 강제 활성화 (bf16 base 환경에서만 권장)
+uv run python scripts/training/run_rl.py rl.use_vllm=true
 
 # 신용할당 비활성화 (균등 broadcast 모드)
 uv run python scripts/training/run_rl.py \
@@ -822,7 +826,7 @@ model:
 | 파라미터 | 기본값 | 설명 |
 |---------|--------|------|
 | `model.sft_adapter_dir` | `data/models/.../checkpoints/sft/final` | SFT adapter 경로 (frozen으로 사용) |
-| `rl.use_vllm` | `true` | vLLM colocate 모드 활성화 |
+| `rl.use_vllm` | `false` | vLLM colocate 활성화 (NF4 환경에서는 발산하므로 비활성. bf16 base 전환 시에만 `true` 권장) |
 | `rl.vllm_mode` | `"colocate"` | `"colocate"` (DDP 각 rank 내장) \| `"server"` (별도 GPU) |
 | `rl.vllm_gpu_memory_utilization` | `0.45` | vLLM KV cache 비율 (24GB 기준, OOM 시 0.4로 낮춤) |
 | `rl.num_generations` | `4` | 프롬프트당 rollout 생성 수 (G) |

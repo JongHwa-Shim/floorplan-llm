@@ -88,6 +88,44 @@ class RLTrainer(GRPOTrainer):
         # (TRL의 normalize_then_sum 모드 대신 자체 GDPO + 신용할당 사용)
         super().__init__(reward_funcs=reward_funcs, **kwargs)
 
+        # Mod Record: TRL GRPOTrainer.__init__은 beta != 0.0일 때 ref adapter를 추가한 후
+        # `if ".default." in name: ref_param.copy_(default_param)`으로 가중치를 복사한다.
+        # 우리 멀티 어댑터(sft/rl) 구조에는 .default. 이름의 파라미터가 없어 TRL의 복사 루프가
+        # 0건 매칭되고, ref adapter는 add_adapter()의 무작위 초기화 상태로 남는다.
+        # 이대로 KL을 계산하면 reference policy가 의미 없는 분포가 되므로, SFT lora 가중치를
+        # ref adapter로 직접 복사하여 reference = base + SFT 정책으로 정확히 정의한다.
+        # 동시에 ref adapter 파라미터를 frozen 처리하고, 활성 adapter를 [sft, rl]로 재설정해
+        # forward 시 ref adapter가 정책 계산에 끼어들지 않도록 한다.
+        if hasattr(self.model, "peft_config") and "ref" in self.model.peft_config:
+            raw_model = self.accelerator.unwrap_model(self.model)
+            copied = 0
+            for name, param in raw_model.named_parameters():
+                if ".sft." in name and ("lora_A" in name or "lora_B" in name):
+                    ref_name = name.replace(".sft.", ".ref.")
+                    try:
+                        ref_param = raw_model.get_parameter(ref_name)
+                    except AttributeError:
+                        continue
+                    ref_param.data.copy_(param.data)
+                    copied += 1
+            # ref adapter 전체 frozen
+            for name, param in raw_model.named_parameters():
+                if ".ref." in name:
+                    param.requires_grad_(False)
+            # 활성 어댑터를 [sft, rl]로 재설정 (ref는 KL 계산 시 TRL이 임시 활성화)
+            try:
+                raw_model.base_model.set_adapter(["sft", "rl"])
+                # set_adapter가 SFT를 다시 trainable로 만드는 경우 재차 frozen 강제
+                for name, param in raw_model.named_parameters():
+                    if ".sft." in name:
+                        param.requires_grad_(False)
+            except Exception as e:
+                logger.warning(f"활성 어댑터 재설정 실패 (무시 가능): {e}")
+            logger.info(
+                f"TRL ref adapter 가중치 SFT에서 복사 완료: {copied}개 lora 텐서 "
+                "(reference policy = base + SFT)"
+            )
+
     # ---------------------------------------------------------------------------
     # 저장 / 로드 오버라이드
     # ---------------------------------------------------------------------------

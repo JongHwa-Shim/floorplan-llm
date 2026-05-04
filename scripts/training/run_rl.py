@@ -1,11 +1,12 @@
 """RL(강화학습) 훈련 실행 스크립트.
 
 SFT final 모델에 GDPO + 토큰 수준 신용할당 강화학습을 적용한다.
-Rule-based RLVR 보상함수로 7가지 보상을 사용한다.
-롤아웃 생성은 기본적으로 vLLM colocate 모드를 사용한다.
+Rule-based RLVR 보상함수로 11가지 보상을 사용한다.
+롤아웃 생성은 기본적으로 HF generate를 사용한다 (NF4 환경에서 vLLM colocate는
+PEFT 4bit merge round-trip 손실로 정책 분포가 발산하므로 비활성화 — pipeline.yaml 주석 참고).
 
 사용법:
-    # 기본 실행 (config/training/rl/pipeline.yaml 사용, vLLM colocate)
+    # 기본 실행 (config/training/rl/pipeline.yaml 사용, HF generate)
     uv run python scripts/training/run_rl.py
 
     # DDP 멀티 GPU (2개)
@@ -14,17 +15,17 @@ Rule-based RLVR 보상함수로 7가지 보상을 사용한다.
     # 하이퍼파라미터 오버라이드
     uv run python scripts/training/run_rl.py training.learning_rate=5e-6
 
-    # 디버그 모드 (10 step, vLLM 비활성화 → HF generate 사용)
-    uv run python scripts/training/run_rl.py training.max_steps=10 training.report_to=none rl.use_vllm=false
+    # vLLM colocate 활성화 (bf16 base 환경에서만 권장)
+    uv run python scripts/training/run_rl.py rl.use_vllm=true
+
+    # 디버그 (10 step, W&B 비활성화)
+    uv run python scripts/training/run_rl.py training.max_steps=10 training.report_to=none
 
     # W&B 비활성화
     uv run python scripts/training/run_rl.py training.report_to=none
 
     # 신용할당 비활성화 (균등 broadcast 모드)
     uv run python scripts/training/run_rl.py advantage.use_token_credit_assignment=false
-
-    # vLLM server 모드 전환 (3 GPU 이상 환경)
-    uv run torchrun --nproc_per_node=2 scripts/training/run_rl.py rl.vllm_mode=server
 
     # Resume
     uv run python scripts/training/run_rl.py resume.enabled=true
