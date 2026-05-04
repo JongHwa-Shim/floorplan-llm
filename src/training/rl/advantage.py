@@ -10,7 +10,8 @@ RLTrainer._apply_token_credit_assignment()에서 호출되는
 
     ② 보상별 토큰 advantage 계산 (error_mask 적용)
        신용할당 ON (전역 토글 AND 보상별 설정 모두 True):
-           token_A_k = A_k × (1-mask_k) - |A_k| × penalty × mask_k
+           token_A_k = A_k * [1 + sign(A_k) * (alpha*(1-mask_k) - beta*mask_k)]
+                       - kappa * mask_k
        신용할당 OFF:
            token_A_k = A_k (broadcast, 모든 토큰 동일)
 
@@ -113,7 +114,8 @@ def compute_token_advantages(
         A_k_local: 로컬 프로세스의 정규화된 보상별 어드밴티지. shape: $(B_{local}, K)$
         reward_names: 보상함수 이름 리스트 (K개, reward_cfgs와 순서 일치).
         reward_cfgs: 보상 설정 딕셔너리 리스트 (K개).
-            각 항목: {weight, credit_assignment, penalty_scale, enabled}.
+            각 항목: {weight, credit_assignment, enabled,
+                      nominal_gain, faulty_attenuation, penalty_offset}.
         error_masks_batch: 로컬 배치 오류 마스크.
             error_masks_batch[i][reward_name] = shape $(L_i,)$ mask tensor.
         completion_lengths: 각 completion의 실제 토큰 수 리스트.
@@ -155,11 +157,13 @@ def compute_token_advantages(
                     mask_for_credit = torch.zeros(seq_len, device=device)
                     mask_for_credit[:mask_len] = error_mask[:mask_len].to(device)
 
-                    # token_A_k = A × (1-mask) - |A| × penalty × mask
+                    # 옵션 F: a_t = A * [1 + sign(A) * (alpha(1-m) - beta*m)] - kappa*m
                     token_A_seq = apply_token_credit_assignment(
                         advantage=A_k_i,
                         error_mask=mask_for_credit,
-                        penalty_scale=float(cfg.get("penalty_scale", 1.0)),
+                        nominal_gain=float(cfg.get("nominal_gain", 0.0)),
+                        faulty_attenuation=float(cfg.get("faulty_attenuation", 0.0)),
+                        penalty_offset=float(cfg.get("penalty_offset", 0.0)),
                     )
                     token_A_k[:seq_len] = token_A_seq
                 else:
