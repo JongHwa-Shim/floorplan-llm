@@ -88,6 +88,10 @@ def build_training_arguments(cfg: DictConfig) -> TrainingArguments:
         # quantized weight buffer까지 NCCL로 rank간 브로드캐스트하여 ~수GB 임시 메모리 할당 → OOM.
         # NF4 buffer는 rank간 동기화 불필요(각 rank가 동일하게 로드)하므로 False로 비활성화.
         ddp_broadcast_buffers=False,
+        # Mod Record: paged_adamw_32bit은 momentum/variance fp32 텐서를 CPU RAM에 페이징하여
+        # GPU 메모리를 절약한다. LoRA trainable params 80M 기준 ~640MB GPU 절약. 디폴트는
+        # 기존 adamw_torch로 두어 외부 호환성 보존, config에서 paged_adamw_32bit로 변경 가능.
+        optim=train_cfg.get("optim", "adamw_torch"),
     )
 
     if max_steps > 0:
