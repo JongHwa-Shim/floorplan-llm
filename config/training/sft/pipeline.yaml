@@ -81,3 +81,10 @@ training:
   load_best_model_at_end: true
   max_steps: 0                        # 0 = 전체 epoch 기반 학습
   output_dir: "data/models/${model.name}/checkpoints/sft/${training.run_name}"
+  # optimizer 선택:
+  #   - adamw_torch (기본): GPU에 momentum/variance fp32 상주. SFT의 peak 메모리(per_device=8 + accum=1)에서
+  #     안정적으로 작동. ~640MB GPU 추가 사용.
+  #   - paged_adamw_32bit: bitsandbytes의 CUDA Unified Memory 페이징 사용. RL처럼 batch peak가 작은 환경에서는
+  #     ~640MB 절약 가능하지만, SFT의 큰 peak에서는 WSL2 환경에서 OOM 발생(pythonInterface.cpp:670).
+  #     RTX 3090 24GB + WSL2 환경에서는 사용 비추천.
+  optim: "adamw_torch"
