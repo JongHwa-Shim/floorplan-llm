@@ -52,6 +52,13 @@ os.environ.setdefault("NCCL_P2P_DISABLE", "1")
 os.environ.setdefault("NCCL_SHM_DISABLE", "1")
 os.environ.setdefault("NCCL_IB_DISABLE", "1")
 
+# Mod Record: 이전에 CUDA_VISIBLE_DEVICES를 LOCAL_RANK로 제한하는 방식으로 GPU 비대칭을
+# 해결했으나(rank 1 worker가 cuda:0에 reserved=6.5GB/peak=13GB 풀 잔존), HF Trainer의 DDP
+# wrap이 device_ids=[LOCAL_RANK]를 사용하므로 worker별 가시 GPU가 1개로 줄면 rank 1에서
+# torch.nn.parallel._functions._get_stream의 _streams[1] 접근이 IndexError를 일으킨다.
+# 따라서 가시 GPU는 그대로 두고 main()에서 torch.cuda.set_device(LOCAL_RANK)로 default
+# device만 변경하는 방식으로 전환했다 (main 함수 내 구현 참고).
+
 import hydra
 import numpy as np
 import torch
@@ -69,6 +76,7 @@ from src.training.rl import (
 )
 from src.training.rl.model_loader import prepare_vllm_base_model
 from src.training.augmentation.tokenizer import load_vocab
+from src.utils.logging import setup_library_logging_propagation
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +199,10 @@ def main(cfg: DictConfig) -> None:
     Args:
         cfg: Hydra가 주입하는 DictConfig.
     """
+    # transformers/TRL/datasets 등 라이브러리 로그가 Hydra의 root file handler까지 전파되도록
+    # propagation 활성화. 미적용 시 훈련 루프 내부 메시지(loss/eval/save)가 run_rl.log에 누락된다.
+    setup_library_logging_propagation()
+
     logger.info("=== RL 훈련 시작 ===")
 
     # DDP 재시작: nproc_per_node > 1이고 아직 torchrun 하위 프로세스가 아니면
@@ -200,6 +212,16 @@ def main(cfg: DictConfig) -> None:
         cmd = ["torchrun", f"--nproc_per_node={nproc}"] + sys.argv
         logger.info(f"DDP 모드: torchrun으로 재시작 (nproc_per_node={nproc})")
         os.execvp("torchrun", cmd)
+
+    # Mod Record: torchrun 자식의 default cuda device를 자기 LOCAL_RANK로 설정.
+    # 모델 로드(PeftModel.from_pretrained 등) 과정이 device='cuda'(default)로 임시 텐서를
+    # 만들 때 cuda:0 → LOCAL_RANK GPU로 매핑되어 다른 worker의 GPU에 메모리를 잡는 비대칭을
+    # 차단한다. CUDA_VISIBLE_DEVICES 제한 방식은 HF Trainer DDP wrap(device_ids=[LOCAL_RANK])과
+    # 충돌하여 IndexError를 일으키므로, 가시 GPU는 그대로 두고 default device만 변경한다.
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+        logger.info(f"default cuda device 설정: cuda:{local_rank}")
 
     # 증강 설정 로드 후 cfg.augmentation으로 병합
     aug_config_path = Path(_PROJECT_ROOT) / cfg.data.aug_pipeline_config
@@ -306,6 +328,12 @@ def main(cfg: DictConfig) -> None:
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         ddp_find_unused_parameters=False,
+        # Mod Record: NF4 양자화 buffer는 frozen이고 모든 rank가 HF Hub에서 동일 가중치를
+        # 독립 로드하므로 매 forward 시작 시 rank 0 → 다른 rank로 broadcast할 필요 없다.
+        # broadcast_buffers=True(기본값)는 NF4 메타데이터(absmax/quant_state)까지 broadcast하여
+        # rank 0에 staging 버퍼를 일시 점유시킨다. SFT trainer.py와 동일하게 끄기.
+        # GPU 0/1 메모리 비대칭(15GB vs 8.6GB) 진단의 일환.
+        ddp_broadcast_buffers=False,
         optim=cfg.training.get("optim", "paged_adamw_32bit"),
     )
 

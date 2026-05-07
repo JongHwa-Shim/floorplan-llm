@@ -3,12 +3,18 @@
 # Mod Record: 이전 구조에서는 sft/final/model.safetensors(merged full model)를 로컬에서 로드했음.
 # 새 구조: HF Hub NF4 base + partial_state.pt + SFT adapter(frozen) + RL adapter(trainable)로 구성.
 
+# Mod Record: hydra.run.dir이 누락되어 있어 RL 실행 결과가 outputs/{날짜}/{시간}/에 저장되던
+# 문제 수정. SFT/embed_align과 동일하게 outputs/training/rl/ 하위에 정리되도록 한다.
+hydra:
+  run:
+    dir: outputs/training/rl/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
 model:
   user: "Qwen"
   name: "Qwen2.5-Coder-7B"
   hub_id: "${model.user}/${model.name}"                                              # HF Hub 전체 경로
   embed_align_dir: "data/models/Qwen2.5-Coder-7B/final_checkpoints/embed_align"             # partial_state.pt 위치
-  sft_adapter_dir: "data/models/Qwen2.5-Coder-7B/final_checkpoints/sft/10epoch additional training using sft-lora-0424-first-begin(20epoch)/checkpoint-105399"                 # SFT adapter 위치 (frozen)
+  sft_adapter_dir: "data/models/Qwen2.5-Coder-7B/final_checkpoints/sft/10epoch additional training using sft-lora-0424-first-begin(20epoch)/checkpoint-110418"                 # SFT adapter 위치 (frozen)
   tokenizer_dir: "data/models/${model.name}/tokenization"                            # 확장 토크나이저 경로
   vocab_extension: "${model.tokenizer_dir}/vocab_extension.json"
 
@@ -46,7 +52,7 @@ data:
 
 distributed:
   # 사용할 GPU 수. 1이면 단일 GPU 모드, 2 이상이면 torchrun DDP로 자동 전환
-  nproc_per_node: 1
+  nproc_per_node: 2
 
 resume:
   enabled: false
@@ -55,10 +61,11 @@ resume:
 
 training:
   output_dir: "data/models/${model.name}/checkpoints/rl"
+  dataloader_num_workers: 4
   num_train_epochs: 1
-  per_device_train_batch_size: 1
-  gradient_accumulation_steps: 8
-  learning_rate: 5.0e-6
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 4
+  learning_rate: 7.0e-6
   lr_scheduler_type: "cosine"
   warmup_ratio: 0.05
   weight_decay: 0.01
@@ -68,7 +75,7 @@ training:
   save_steps: 100
   report_to: "wandb"
   project_name: "floorplan-llm"
-  run_name: "floorplan-rl"
+  run_name: "rl-first-try-with-token-level-credit-assignment"
   seed: 42
   # 체크포인트 최대 보존 수 (null = 제한 없이 전체 보존)
   save_total_limit: null
@@ -78,7 +85,7 @@ training:
 
 # RL 생성 설정 (vLLM 포함)
 rl:
-  num_generations: 4                    # 프롬프트당 생성 개수 (G)
+  num_generations: 16                    # 프롬프트당 생성 개수 (G)
   temperature: 0.7
   top_p: 0.95
   kl_coeff: 0.05                        # KL 페널티 계수 (beta)
