@@ -60,6 +60,7 @@ from src.training.embed_align import (
     load_model_and_tokenizer,
 )
 from src.training.embed_align.model_loader import PartialEmbedding, PartialLMHead
+from src.utils.logging import setup_library_logging_propagation
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,11 @@ def main(cfg: DictConfig) -> None:
     Args:
         cfg: Hydra가 주입하는 DictConfig.
     """
+    # transformers/TRL/datasets 등 라이브러리 로그가 Hydra의 root file handler까지 전파되도록
+    # propagation 활성화. 미적용 시 훈련 루프 내부 메시지(loss/eval/save)가
+    # run_embed_align.log에 누락된다.
+    setup_library_logging_propagation()
+
     logger.info("=== Embedding Alignment 훈련 시작 ===")
 
     # DDP 재시작: distributed.nproc_per_node > 1이고 아직 torchrun 하위 프로세스가 아니면
@@ -149,6 +155,17 @@ def main(cfg: DictConfig) -> None:
         cmd = ["torchrun", f"--nproc_per_node={nproc}"] + sys.argv
         logger.info(f"DDP 모드: torchrun으로 재시작 (nproc_per_node={nproc})")
         os.execvp("torchrun", cmd)
+
+    # Mod Record: torchrun 자식의 default cuda device를 자기 LOCAL_RANK로 설정한다.
+    # 일부 라이브러리가 device='cuda'(default) 임시 텐서를 만들 때 rank 1 worker가 cuda:0에
+    # 메모리를 잡아 GPU 메모리 비대칭이 발생할 수 있다. set_device로 default를 LOCAL_RANK로
+    # 매핑하면 해당 임시 텐서가 자기 GPU에 생성되어 비대칭이 해소된다.
+    # CUDA_VISIBLE_DEVICES 제한 방식은 HF Trainer DDP wrap(device_ids=[LOCAL_RANK])과 충돌하므로
+    # 가시 GPU는 그대로 두고 default device만 변경한다.
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+        logger.info(f"default cuda device 설정: cuda:{local_rank}")
 
     # 증강 설정 로드 후 cfg.augmentation으로 병합
     # validate_augmentation.py와 동일한 패턴: _PROJECT_ROOT 기준 상대경로로 resolve
