@@ -27,6 +27,7 @@ TRL GRPOTrainer를 서브클래싱하여 GDPO + 토큰 수준 신용할당을 �
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -137,20 +138,63 @@ class RLTrainer(GRPOTrainer):
         새 구조에서는 RL adapter(adapter_name="rl")만 저장하여 다음 단계(추론/분석)에서
         멀티 어댑터 스태킹으로 복원한다.
 
+        Mod Record (어댑터 평탄화): PEFT의 PeftModel.save_pretrained는 adapter_name이
+        "default"가 아닌 경우 항상 ``{save_directory}/{adapter_name}/`` 서브디렉토리에 저장
+        하는 표준 컨벤션을 갖는다 (peft/peft_model.py L299 참고). 그 결과 우리의 RL 체크포인트는
+        ``checkpoint-{step}/rl/adapter_model.safetensors`` 형태가 되어 (a) optimizer/scheduler/
+        trainer_state 등 Trainer가 root에 직접 저장하는 파일들과 디렉토리 레벨이 어긋나고
+        (b) ``_load_from_checkpoint``가 root를 가정해 읽으므로 Resume이 동작하지 않는 잠재 버그가
+        있었다. 평탄화 후에는 SFT 체크포인트와 동일한 단일-어댑터 root 구조가 되며, PEFT API에
+        의존하지 않는 우리 자체 Resume 로직과도 자연스럽게 정합한다.
+
         Args:
             output_dir: 저장 대상 디렉토리. None이면 TrainingArguments.output_dir 사용.
             _internal_call: Trainer 내부 호출 여부 (무시).
         """
-        save_dir = output_dir or self.args.output_dir
-        Path(save_dir).mkdir(parents=True, exist_ok=True)
+        save_dir = Path(output_dir or self.args.output_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
 
         # accelerator로 DDP 래퍼 언래핑
         raw_model = self.accelerator.unwrap_model(self.model)
-        # RL adapter만 선택적 저장
-        raw_model.save_pretrained(save_dir, selected_adapters=["rl"])
+        # RL adapter만 선택적 저장 (PEFT는 save_dir/rl/ 서브디렉토리에 저장)
+        raw_model.save_pretrained(str(save_dir), selected_adapters=["rl"])
         if self.processing_class is not None:
-            self.processing_class.save_pretrained(save_dir)
-        logger.info(f"RL adapter 저장 완료 (rl only): {save_dir}")
+            self.processing_class.save_pretrained(str(save_dir))
+
+        # PEFT가 만든 save_dir/rl/ 서브디렉토리의 내용을 root로 평탄화. 단일 어댑터만 저장하므로
+        # SFT 체크포인트와 동일한 root 구조가 되며, _load_from_checkpoint의 root 경로 가정과 일치.
+        if self.accelerator.is_main_process:
+            self._flatten_adapter_subdir(save_dir, adapter_name="rl")
+
+        logger.info(f"RL adapter 저장 완료 (rl only, flattened): {save_dir}")
+
+    @staticmethod
+    def _flatten_adapter_subdir(save_dir: Path, adapter_name: str) -> None:
+        """PEFT가 생성한 ``save_dir/{adapter_name}/`` 내용을 ``save_dir/`` 루트로 옮긴다.
+
+        루트에 같은 이름 파일이 이미 있으면 (예: PEFT가 만든 README.md vs Trainer가 만든 README.md)
+        루트 쪽을 어댑터 본체로 덮어쓴다 — adapter_model.safetensors / adapter_config.json은
+        반드시 PEFT가 새로 쓴 것이어야 하기 때문이다. 이동 후 빈 서브디렉토리를 삭제한다.
+        호출자는 main process 가드 하에서만 호출해야 한다 (DDP 환경 안전).
+
+        Args:
+            save_dir: 체크포인트 root 디렉토리.
+            adapter_name: 평탄화 대상 어댑터 이름.
+        """
+        sub_dir = save_dir / adapter_name
+        if not sub_dir.is_dir():
+            return
+
+        for entry in sub_dir.iterdir():
+            target = save_dir / entry.name
+            if target.exists():
+                if target.is_dir():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+            shutil.move(str(entry), str(target))
+
+        sub_dir.rmdir()
 
     def _load_from_checkpoint(self, resume_from_checkpoint: str, model=None) -> None:
         """체크포인트에서 RL adapter 가중치를 in-place copy로 복원한다.

@@ -824,8 +824,9 @@ data/models/{model.name}/checkpoints/sft/{run_name}/
 | 파일 | 역할 |
 |------|------|
 | `src/training/sft/model_loader.py` | HF Hub base model 로드 + `partial_state.pt` 커스텀 토큰 가중치 주입 + LoRA 적용. `load_base_model_with_partial_state()`, `build_lora_config()` 공개 API 제공 (RL에서 재사용) |
-| `src/training/sft/trainer.py` | `TrainingArguments` + 표준 `Trainer` 빌드. `_parse_save_total_limit()`: OmegaConf가 YAML `null`을 문자열 `"null"`로 전달하는 케이스를 방어적으로 처리 |
-| `scripts/training/run_sft.py` | Hydra 진입점, seed 고정, Resume 분기, 훈련 후 adapter + optimizer 저장 |
+| `src/training/sft/trainer.py` | `TrainingArguments` + 표준 `Trainer` 빌드. `_parse_save_total_limit()`: OmegaConf가 YAML `null`을 문자열 `"null"`로 전달하는 케이스를 방어적으로 처리. `optim`을 config로 받아 외부에서 선택 가능 (default `adamw_torch`) — RL과 동일 인터페이스. 단 `paged_adamw_32bit`은 SFT의 큰 batch peak + WSL2 환경에서 bitsandbytes의 CUDA Unified Memory 풀 할당이 실패(`pythonInterface.cpp:670 out of memory`)하므로 SFT는 `adamw_torch` 권장. RL은 batch peak이 작아 `paged_adamw_32bit` 안전 |
+| `scripts/training/run_sft.py` | Hydra 진입점, seed 고정, Resume 분기, 라이브러리 로깅 propagation 활성화, 훈련 후 adapter + optimizer 저장 |
+| `src/utils/logging.py` | `setup_library_logging_propagation()` — transformers/datasets/peft/trl/accelerate 로그를 Hydra root file handler로 전파시키는 공통 헬퍼 (embed_align/SFT/RL 모두 main 진입부에서 호출) |
 | `config/training/sft/pipeline.yaml` | LoRA, 학습률, model_dir 등 SFT 전체 설정 |
 | `config/training/augmentation/sft.yaml` | SFT용 증강 파라미터 (embed_align.yaml과 동일) |
 | `tests/training/sft/validate_sft.py` | 로드·LoRA구조·훈련·저장·Resume 통합 검증 |
@@ -853,9 +854,21 @@ RL 단계 도입으로 vLLM 의존성에 끌려 PyTorch가 2.6(cu124) → 2.10(c
 | DDP 초기화 `_verify_param_shape_across_processes`에서 `ncclUnhandledCudaError "out of memory"` | NCCL 2.27.5 + WSL2에서 P2P/SHM 통신 경로 회귀 버그. `/dev/shm` 크기와 무관하게 SHM 채널이 깨짐 | `run_*.py` 상단에서 `NCCL_P2P_DISABLE=1` / `NCCL_SHM_DISABLE=1` / `NCCL_IB_DISABLE=1` 환경변수 설정 → SOCKET 통신 강제. 단일 머신 2-GPU에서 throughput 손실 거의 없음 |
 | 학습 step 도중 OOM (예: 19.45GB 할당 + 1.79GB unallocated reserved + 3.74GB 신규 요청 → fail) | PyTorch 2.10의 cudaMalloc 파편화 누적 | `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` 환경변수 설정 (가상 주소 공간 점진 확장) |
 | `resize_token_embeddings` 호출 시 GPU에 ~2GB 임시 텐서 생성 (embed_tokens + lm_head 합산 ~4GB) | transformers 5.x에서 `mean_resizing=True`(기본값)가 기존 embedding matrix를 fp32로 GPU 복사하여 multivariate normal 공분산 계산 | `model_loader.py`의 `resize_token_embeddings(..., mean_resizing=False)` + 직후 `torch.cuda.empty_cache()`. partial_state.pt로 새 토큰 행을 어차피 덮어쓰므로 초기화 방식 무관 |
-| DDP 초기화 시 NF4 quantized buffer까지 NCCL로 rank간 브로드캐스트하여 추가 메모리 점유 | `broadcast_buffers=True`(기본값)가 frozen NF4 buffer까지 동기화 | `trainer.py`에 `ddp_broadcast_buffers=False` 추가 (각 rank가 동일 weight를 독립 로드하므로 동기화 불필요) |
+| DDP 초기화 시 NF4 quantized buffer까지 NCCL로 rank간 브로드캐스트하여 추가 메모리 점유 | `broadcast_buffers=True`(기본값)가 frozen NF4 buffer까지 동기화 | `trainer.py`에 `ddp_broadcast_buffers=False` 추가 (각 rank가 동일 weight를 독립 로드하므로 동기화 불필요). RL은 `run_rl.py`의 `GRPOConfig` kwargs에 동일 옵션 명시 |
+| GPU 0/1 메모리 비대칭 (예: rank 0=15GB, rank 1=8.6GB) — rank 1 worker가 GPU 0에 reserved 풀(~6.5GB)을 잡은 채 release하지 않음 | 모델 로드 경로(특히 `PeftModel.from_pretrained`, `add_adapter`)가 `device='cuda'`(default)로 임시 텐서를 만들 때 cuda:0에 메모리를 잡음. SFT는 `get_peft_model`만 사용해 증상이 약했지만 RL은 디스크에서 어댑터를 로드하는 단계(SFT adapter 주입)에서 base model(~13GB)이 cuda:0에 일시 올라가 reserved 풀이 만들어짐 | `run_*.py` main 진입부(DDP 재시작 분기 직후)에서 `torch.cuda.set_device(LOCAL_RANK)`로 default cuda device를 자기 GPU로 매핑. CUDA_VISIBLE_DEVICES 제한 방식은 HF Trainer의 `device_ids=[LOCAL_RANK]`와 충돌하여 `_get_stream` IndexError 발생하므로 set_device 방식 채택 — 가시 GPU는 그대로 두고 default만 변경 |
 
 > 환경변수는 `os.environ.setdefault()`로 박혀 외부에서 override 가능하다. 향후 NCCL/PyTorch 호환 버전이 안정화되면 제거 검토.
+
+**훈련 로그 캡처 (`run_*.log`):**
+
+Hydra는 root logger에 file handler(`run_*.log`)를 자동 부착하지만, transformers / datasets / TRL / accelerate / peft 등의 라이브러리는 자체 logging 모듈(`transformers.utils.logging`)을 통해 메시지를 발행하며 root logger 전파가 기본 OFF이다. 이 상태로 두면 Trainer 내부의 train/eval/save 단계 로그가 stderr로만 나가고 `run_*.log`에는 훈련 준비 단계까지의 메시지만 남아 본 훈련 루프 로그가 통째로 누락된다.
+
+`src/utils/logging.py`의 `setup_library_logging_propagation()`이 다음을 수행해 이를 정상화한다:
+1. `transformers.utils.logging.enable_propagation()` — root logger 전파 활성화
+2. `transformers.utils.logging.disable_default_handler()` — 라이브러리 자체 stderr handler 제거 (Hydra root logger의 stream handler와 중복 출력 방지)
+3. transformers/datasets/peft/trl/accelerate 로거 level을 INFO로 명시 강제 (라이브러리 기본값이 WARNING으로 초기화돼 INFO 메시지가 누락되는 케이스 방어)
+
+`scripts/training/run_{embed_align,sft,rl}.py`의 main 함수 진입부(DDP 재시작 분기 이전)에서 호출하므로 torchrun 자식 프로세스에도 동일하게 적용된다. tqdm progress bar는 logging 시스템 외부이므로 여전히 stderr 전용 — 의도된 동작이며 step별 `logging_steps` 메시지로 충분하다.
 
 **실행:**
 ```bash
@@ -1129,6 +1142,12 @@ GPU 0 (rank 0)                        GPU 1 (rank 1)
 
 14. **검증 도구 분리 (verification/):** 위 결함들을 의도 격리 단위로 검출/방어하기 위해 [`tests/training/rl/verification/`](../tests/training/rl/verification/) 아래에 challenging fixture 기반 verifier 17개를 신설했다. 기존 `validate_rl.py`(통합 4-phase)는 그대로 두고 보완. Group 1(전처리), Group 2(보상별 11개), Group 3(어드밴티지·손실 mock + 실제 모델 1 micro-step) 구성. 모든 verifier가 회귀 가드로 작동하여 위 13개 항목의 의도가 미래 코드 변경 시에도 유지됨을 보장한다.
 
+15. **PEFT named adapter 평탄화 (체크포인트 디렉토리 구조 정렬):** [peft/peft_model.py L299](../.venv/lib/python3.12/site-packages/peft/peft_model.py#L299)의 `PeftModel.save_pretrained()`는 어댑터 이름이 정확히 `"default"`인 경우만 `save_directory` 루트에 저장하고, 그 외 모든 named adapter는 `save_directory/{adapter_name}/` 서브디렉토리에 저장하는 컨벤션을 갖는다. RL은 어댑터 이름을 `"rl"`로 등록하므로 저장 결과가 `checkpoint-{step}/rl/adapter_model.safetensors` 형태가 되어 (a) optimizer / scheduler / trainer_state / rng_state 등 transformers Trainer가 root에 직접 저장하는 파일들과 디렉토리 레벨이 어긋나고, (b) `_load_from_checkpoint`는 `ckpt_path/adapter_model.safetensors`를 가정해 직접 safetensors를 읽으므로 Resume이 "복원 건너뜀" 경고만 내고 RL 가중치 없이 진행하는 잠재 버그가 있었다. `RLTrainer.save_model()`이 PEFT 호출 후 `save_dir/rl/*` 파일들을 root로 이동하고 빈 폴더를 삭제(`_flatten_adapter_subdir`, DDP main process 가드)하여 SFT 체크포인트와 동일한 단일-어댑터 root 구조로 정규화한다. 우리 자체 Resume 로직은 PEFT의 `load_adapter()` API를 우회해 직접 in-place copy를 사용하므로(2번 — optimizer Parameter 참조 보존) PEFT 컨벤션을 어겨도 호환성에 영향 없음.
+
+16. **RL `output_dir`에 `${run_name}` 서브디렉토리 추가:** 이전엔 `data/models/.../checkpoints/rl/`에 직접 `checkpoint-{step}/`이 떨어져 여러 run의 체크포인트가 한 디렉토리에서 충돌했다. SFT/embed_align과 동일한 패턴(`.../checkpoints/rl/${training.run_name}/checkpoint-{step}/`)으로 변경하여 run 단위 격리 보장. `_resolve_checkpoint`의 자동 탐색은 `cfg.training.output_dir` 하위만 보므로 OmegaConf 보간이 자동으로 새 경로를 따라가 코드 변경 불필요. 다른 run 체크포인트에서 이어가야 하면 `resume.checkpoint_path`로 임의 경로를 직접 지정하면 된다 (run_name과 무관).
+
+17. **RL `hydra.run.dir` 누락 수정:** `config/training/rl/pipeline.yaml`에 `hydra.run.dir` 설정이 빠져 있어 Hydra 기본값(`outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}`)이 적용되어 RL 실행 결과가 `outputs/2026-05-07/16-32-26/` 같은 위치로 떨어졌다. SFT/embed_align과 동일하게 `outputs/training/rl/${now:%Y-%m-%d}/${now:%H-%M-%S}`로 명시하여 단계별 분리 보장.
+
 #### 체크포인트 및 출력
 
 ```
@@ -1151,9 +1170,10 @@ data/models/{model.name}/checkpoints/rl/{run_name}/
 | 파일 | 역할 |
 |------|------|
 | `src/training/rl/model_loader.py` | HF Hub NF4 + partial_state.pt + SFT(frozen)+RL(trainable) 멀티어댑터 구성 + vllm_base bf16 저장 |
-| `src/training/rl/trainer.py` | `RLTrainer` (GRPOTrainer 서브클래스) — GDPO + 토큰 신용할당 |
+| `src/training/rl/trainer.py` | `RLTrainer` (GRPOTrainer 서브클래스) — GDPO + 토큰 신용할당 + 어댑터 평탄화 (`save_model`, `_flatten_adapter_subdir`) + Resume in-place copy (`_load_from_checkpoint`) |
 | `src/training/rl/advantage.py` | `gdpo_group_normalize()`, `compute_token_advantages()`, `_batch_normalize()` |
 | `src/training/rl/dataset.py` | `RLPromptDataset` — 프롬프트 + 모델 시점 metadata 로드 (drop 데이터에 반영, 출력 label 없음) |
+| `src/training/rl/diagnostics.py` | `MemoryDiagnosticCallback` — DDP rank별 alloc/reserved/peak GPU 메모리를 매 step 출력하는 디버그 콜백. 평소 `run_rl.py`에서 등록하지 않고 메모리 비대칭 의심 시 import + `trainer.add_callback()` 한 줄로 활성화. 모든 가시 GPU에 대해 측정해 worker가 자기 device가 아닌 device에도 텐서를 올렸는지(default cuda:0 사용 등) 검증할 때 사용 |
 | `src/training/rl/rewards/__init__.py` | `compute_all_rewards()` 공개 API |
 | `src/training/rl/rewards/*.py` | 11개 규칙 기반 보상함수 (parser, format, geometry, room_in_outline, outline_in_room, coverage, connectivity, count, spatial, input_consistency, credit_assignment) |
 | `src/training/rl/rewards/parser.py` | 생성 토큰 파싱. `ParsedFloorplan.front_door_token_indices` ([cx_idx, cy_idx, w_idx, h_idx]) 포함 |

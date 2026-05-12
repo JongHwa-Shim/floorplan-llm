@@ -92,6 +92,7 @@ floorplan-llm/
 │   │       ├── dataset.py          # RLPromptDataset (프롬프트 + 모델 시점 metadata, drop 데이터에 반영)
 │   │       ├── advantage.py        # GDPO 정규화 + 토큰 신용할당 + 배치 정규화
 │   │       ├── trainer.py          # RLTrainer (GRPOTrainer 서브클래스)
+│   │       ├── diagnostics.py      # MemoryDiagnosticCallback (DDP rank별 alloc/reserved/peak 출력, 디버그용)
 │   │       └── rewards/            # 11개 규칙 기반 보상함수
 │   │           ├── __init__.py     # compute_all_rewards 공개 API
 │   │           ├── parser.py       # 생성 토큰 파싱 (ParsedFloorplan, front_door_token_indices 포함)
@@ -112,7 +113,8 @@ floorplan-llm/
 │   │   ├── output_parser.py        # 생성 토큰 → 구조화 딕셔너리 역변환
 │   │   └── result_saver.py         # 결과 JSON / 이미지 / 토큰 저장
 │   └── utils/                      # 범용 유틸리티
-│       └── extract_partial_state.py  # merged model.safetensors → partial_state.pt 추출
+│       ├── extract_partial_state.py  # merged model.safetensors → partial_state.pt 추출
+│       └── logging.py                # 외부 라이브러리 로그 → Hydra root file handler 전파 헬퍼
 │
 ├── scripts/                        # CLI 실행 진입점
 │   ├── build_dataset/
@@ -191,7 +193,9 @@ floorplan-llm/
 │   ├── training/
 │   │   ├── embed_align/              # Embedding Alignment 실행 로그
 │   │   │   └── YYYY-MM-DD/HH-MM-SS/
-│   │   └── sft/                    # SFT 실행 로그
+│   │   ├── sft/                    # SFT 실행 로그
+│   │   │   └── YYYY-MM-DD/HH-MM-SS/
+│   │   └── rl/                     # RL(GRPO) 실행 로그
 │   │       └── YYYY-MM-DD/HH-MM-SS/
 │   └── inference/
 │       └── {model.name}/{training_stage}/{YYYY-MM-DD}/{HH-MM-SS}/  # 날짜별 실행 디렉토리 (Hydra 로그 포함)
@@ -846,6 +850,9 @@ model:
 | `rewards.<name>.penalty_offset` | (보상별) | 옵션 F κ: advantage와 무관한 절대 페널티 오프셋, [0, ∞) |
 | `training.learning_rate` | `5e-6` | RL adapter 학습률 |
 | `training.optim` | `"paged_adamw_32bit"` | GPU OOM 방지 (momentum을 CPU RAM에 페이징) |
+| `training.output_dir` | `data/models/${model.name}/checkpoints/rl/${training.run_name}` | 체크포인트 저장 경로 (run_name 서브디렉토리) |
+| `training.run_name` | `"floorplan-rl"` | W&B run 이름 + 체크포인트 저장 서브디렉토리명 |
+| `hydra.run.dir` | `outputs/training/rl/${now:%Y-%m-%d}/${now:%H-%M-%S}` | Hydra 로그·설정 스냅샷 저장 경로 |
 | `data.max_completion_length` | `512` | 최대 completion 토큰 수 |
 
 ### `config/training/sft/pipeline.yaml`
@@ -865,6 +872,7 @@ model:
 | `training.learning_rate` | `2e-4` | adapter 학습률 |
 | `training.num_train_epochs` | `3` | 훈련 에폭 수 |
 | `training.gradient_accumulation_steps` | `1` | 그래디언트 누적 steps |
+| `training.optim` | `"adamw_torch"` | optimizer 선택. `paged_adamw_32bit`로 변경 가능하나 SFT의 batch peak가 큰 환경(WSL2 + bitsandbytes)에서는 OOM 위험. 기본 `adamw_torch` 권장 |
 | `training.save_total_limit` | `null` | 보존할 체크포인트 최대 수 (`null` = 제한 없이 전체 보존) |
 | `training.load_best_model_at_end` | `true` | 훈련 종료 시 eval_loss 최고 체크포인트 복원 |
 | `training.max_steps` | `0` | 디버그용 step 제한 (0=비활성) |

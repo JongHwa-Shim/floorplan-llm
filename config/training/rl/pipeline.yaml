@@ -60,13 +60,16 @@ resume:
   auto_find_latest: true
 
 training:
-  output_dir: "data/models/${model.name}/checkpoints/rl"
+  # Mod Record: SFT/embed_align과 동일하게 run_name 서브디렉토리 하위에 체크포인트를 저장하도록
+  # 변경. 여러 RL run을 한 모델 디렉토리 아래에서 독립적으로 관리할 수 있게 한다.
+  # Resume 자동 탐색은 cfg.training.output_dir 하위 checkpoint-* 만 보므로 코드 변경 불필요.
+  output_dir: "data/models/${model.name}/checkpoints/rl/${training.run_name}"
   dataloader_num_workers: 4
   num_train_epochs: 1
   per_device_train_batch_size: 4
   gradient_accumulation_steps: 4
-  learning_rate: 7.0e-6
-  lr_scheduler_type: "cosine"
+  learning_rate: 2.0e-5
+  lr_scheduler_type: "constant_with_warmup"
   warmup_ratio: 0.05
   weight_decay: 0.01
   bf16: true
@@ -75,7 +78,7 @@ training:
   save_steps: 100
   report_to: "wandb"
   project_name: "floorplan-llm"
-  run_name: "rl-first-try-with-token-level-credit-assignment"
+  run_name: "rl-first-try-w-token-level-credit-assignment-max-step-10000-constant-lr-2e-5"
   seed: 42
   # 체크포인트 최대 보존 수 (null = 제한 없이 전체 보존)
   save_total_limit: null
