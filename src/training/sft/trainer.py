@@ -7,14 +7,44 @@ PEFT DoRA adapter가 정식 지원되므로 Embedding Alignment와 달리 Traine
 import logging
 import os
 
+import torch
 from omegaconf import DictConfig
 from peft import PeftModel
 from transformers import AutoTokenizer, Trainer, TrainingArguments
+from transformers.trainer import TRAINING_ARGS_NAME
 from torch.utils.data import Dataset
 
 from src.training.embed_align.collator import EmbedAlignCollator
 
 logger = logging.getLogger(__name__)
+
+
+class SFTAdapterTrainer(Trainer):
+    """embed_tokens/lm_head 저장을 억제하는 SFT용 Trainer.
+
+    표준 ``Trainer._save``는 PEFT 모델을 ``self.model.save_pretrained(output_dir, state_dict=...)``로
+    저장하는데 ``save_embedding_layers``를 지정하지 않아, PEFT 기본값 ``"auto"``가 vocab resize를 감지해
+    resize된 ``embed_tokens``/``lm_head``(~4.36GB, F32)를 어댑터에 함께 저장한다. 이 두 레이어는 SFT에서
+    frozen이고 로드 시 항상 ``partial_state.pt``에서 주입되므로 순전히 중복이며(저장본과 partial_state.pt
+    값이 byte-identical), 어댑터 크기를 ~14배 부풀린다(323MB 어댑터 → 4.69GB 파일).
+
+    ``_save``를 오버라이드해 ``save_embedding_layers=False``로 순수 LoRA 어댑터만 저장한다. main-process
+    가드/FSDP·DeepSpeed 분기는 상위 ``save_model``에 그대로 있으므로 여기서는 PEFT 저장 분기만 재현한다
+    (transformers 5.6 ``Trainer._save`` PEFT 분기 + 플래그 추가). 로드/추론/Resume은 partial_state.pt
+    주입에 의존하므로 무영향.
+    """
+
+    def _save(self, output_dir: str | None = None, state_dict: dict | None = None) -> None:
+        output_dir = output_dir if output_dir is not None else self.args.output_dir
+        os.makedirs(output_dir, exist_ok=True)
+        logger.info(f"Saving model checkpoint to {output_dir}")
+        # SFT 모델은 항상 PeftModel이므로 표준 _save의 PEFT 분기만 재현 + save_embedding_layers=False
+        self.model.save_pretrained(
+            output_dir, state_dict=state_dict, save_embedding_layers=False
+        )
+        if self.processing_class is not None:
+            self.processing_class.save_pretrained(output_dir)
+        torch.save(self.args, os.path.join(output_dir, TRAINING_ARGS_NAME))
 
 
 def _parse_save_total_limit(value: int | str | None) -> int | None:
@@ -126,7 +156,7 @@ def build_trainer(
     training_args = build_training_arguments(cfg)
     collator = EmbedAlignCollator(tokenizer=tokenizer, max_length=cfg.data.max_length)
 
-    trainer = Trainer(
+    trainer = SFTAdapterTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,

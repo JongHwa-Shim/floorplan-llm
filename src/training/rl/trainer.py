@@ -157,7 +157,14 @@ class RLTrainer(GRPOTrainer):
         # accelerator로 DDP 래퍼 언래핑
         raw_model = self.accelerator.unwrap_model(self.model)
         # RL adapter만 선택적 저장 (PEFT는 save_dir/rl/ 서브디렉토리에 저장)
-        raw_model.save_pretrained(str(save_dir), selected_adapters=["rl"])
+        # Mod Record (체크포인트 비대화 수정): save_embedding_layers=False로 embed_tokens/lm_head
+        # 저장을 억제한다. PEFT는 vocab resize를 감지하면 기본값("auto")으로 이 두 레이어(~2.18GB)를
+        # 어댑터에 함께 저장하는데, RL에서는 frozen이고 로드 시 항상 partial_state.pt에서 주입되므로
+        # 순전히 중복(저장본과 partial_state.pt 값이 byte-identical 확인)이다. 억제 시 체크포인트가
+        # ~2.34GB → ~161MB로 축소되며, 로드/추론/Resume은 partial_state.pt 주입에 의존하므로 무영향.
+        raw_model.save_pretrained(
+            str(save_dir), selected_adapters=["rl"], save_embedding_layers=False
+        )
         if self.processing_class is not None:
             self.processing_class.save_pretrained(str(save_dir))
 
@@ -392,9 +399,44 @@ class RLTrainer(GRPOTrainer):
                 # 훈련 backward pass를 위해 반드시 복원 (예외 발생 시에도)
                 self.model.config.use_cache = False
 
+        # Mod Record (RL adapter gradient 누락 수정): TRL은 beta != 0일 때 매
+        # _generate_and_score_completions 내부에서 use_adapter(model, "ref")로 reference
+        # logp를 계산하는데, 그 컨텍스트가 종료될 때 model.set_adapter(previous_adapter)로
+        # 복원한다. 이때 previous_adapter는 PeftModel 인스턴스 속성 active_adapter(단일 문자열
+        # "sft")이므로, 우리가 base_model.set_adapter(["sft","rl"])로 설정한 다중 활성 상태가
+        # "sft" 단독으로 덮어써진다. 결과적으로 RL 어댑터가 비활성화 + requires_grad=False가 되어
+        # 이후 compute_loss forward에서 gradient가 흐르지 않고 lora_B가 0 초기값에 고정됐다.
+        # 매 generation 배치 직후 [sft, rl] 활성 상태를 재확립하여 학습 forward가 항상 RL
+        # 어댑터를 포함하도록 보장한다. (use_adapter는 단일 어댑터만 복원 가능해 라이브러리
+        # 레벨에서 다중 활성 상태를 되돌릴 수 없으므로 서브클래스에서 재확립해야 함)
+        self._reassert_active_adapters()
+
         # 스칼라 advantages → 토큰별 advantages 변환
         output = self._apply_token_credit_assignment(output)
         return output
+
+    def _reassert_active_adapters(self) -> None:
+        """활성 어댑터를 [sft, rl]로, 학습 대상을 rl로 재확립한다.
+
+        TRL의 reference logp 계산(use_adapter)이 활성 어댑터를 stale 단일 "sft"로 되돌려
+        RL 어댑터를 비활성화 + frozen 시키는 문제를 매 generation 배치 직후 복구한다.
+        sft/ref 어댑터는 frozen을 유지하고 rl 어댑터만 trainable로 남긴다.
+
+        Note:
+            requires_grad_()는 동일 Parameter 객체의 플래그만 in-place 토글하므로, 이미 생성된
+            optimizer의 파라미터 참조를 끊지 않는다. beta == 0(ref 어댑터 미생성) 케이스에서도
+            ".ref." 매칭이 0건이라 안전하게 동작한다.
+        """
+        raw_model = self.accelerator.unwrap_model(self.model)
+        try:
+            raw_model.base_model.set_adapter(["sft", "rl"])
+        except Exception as e:  # 어댑터 구성이 예상과 다를 경우 학습을 중단시키지 않고 경고만
+            logger.warning(f"활성 어댑터 재확립 실패 (무시 가능): {e}")
+            return
+        for name, param in raw_model.named_parameters():
+            # sft/ref는 frozen 유지, rl만 trainable
+            if ".sft." in name or ".ref." in name:
+                param.requires_grad_(False)
 
     def _apply_token_credit_assignment(
         self,

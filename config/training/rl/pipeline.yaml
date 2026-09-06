@@ -45,7 +45,7 @@ data:
   arrow_dir: "data/dataset/processed_dataset/rplan/arrow"
   # 프롬프트 생성용 증강 (입력 조건만 증강, 출력은 모델이 생성)
   aug_pipeline_config: "config/training/augmentation/sft.yaml"
-  max_prompt_length: 2048
+  max_prompt_length: 1024
   # 전체 데이터 기준: mean=167, p99=232, max=328 (도어 포함)
   # 512면 max 대비 1.5× 여유, 2048 대비 4× 속도 개선
   max_completion_length: 512
@@ -68,28 +68,36 @@ training:
   num_train_epochs: 1
   per_device_train_batch_size: 4
   gradient_accumulation_steps: 4
-  learning_rate: 2.0e-5
+  learning_rate: 2e-5
   lr_scheduler_type: "constant_with_warmup"
   warmup_ratio: 0.05
   weight_decay: 0.01
   bf16: true
   logging_steps: 5
   save_strategy: "steps"
-  save_steps: 100
+  save_steps: 1000
   report_to: "wandb"
   project_name: "floorplan-llm"
-  run_name: "rl-first-try-w-token-level-credit-assignment-max-step-10000-constant-lr-2e-5"
+  run_name: "260706_rl-max-step-100000"
   seed: 42
   # 체크포인트 최대 보존 수 (null = 제한 없이 전체 보존)
   save_total_limit: null
-  # optimizer: paged_adamw_32bit는 momentum/variance를 CPU RAM으로 페이징해 GPU OOM 방지
-  optim: "paged_adamw_32bit"
-  max_steps: 0                          # 0 = 전체 epoch 기반
+  # optimizer 선택
+  # Mod Record (WSL2 OOM 수정): paged_adamw_32bit는 optimizer state를 cudaMallocManaged
+  # (CUDA managed/unified memory)로 잡는데, 이는 PyTorch caching allocator 풀 바깥의 별도
+  # 할당이다. RL은 generation(num_generations=16) + 긴 시퀀스 + 대형 vocab(152232) logits로
+  # optimizer.step 시점에 PyTorch가 GPU를 거의 다 reserve한 상태가 되어, managed 할당이
+  # 자리를 못 찾고 `pythonInterface.cpp:670 out of memory`로 실패했다 (WSL2 2-GPU DDP).
+  # RL adapter는 ~80M 파라미터뿐이라 fp32 Adam state가 ~640MB로 작으므로, PyTorch 풀 안에서
+  # 할당하는 adamw_torch로 두면 managed 경로 실패가 사라진다. (paged가 유리한 건 optimizer
+  # state가 큰 경우인데 RL은 해당 없음.) 메모리가 더 빠듯하면 num_generations/batch를 줄인다.
+  optim: "adamw_torch"
+  max_steps: 100000                          # 0 = 전체 epoch 기반
 
 # RL 생성 설정 (vLLM 포함)
 rl:
   num_generations: 16                    # 프롬프트당 생성 개수 (G)
-  temperature: 0.7
+  temperature: 1
   top_p: 0.95
   kl_coeff: 0.05                        # KL 페널티 계수 (beta)
   clip_range: 0.2                       # PPO 클리핑 엡실론
@@ -135,17 +143,17 @@ rewards:
 
   count_total:
     enabled: true
-    weight: 0.5
+    weight: 1.0
     credit_assignment: false
 
   count_type:
     enabled: true
-    weight: 1.0
+    weight: 0.5
     credit_assignment: false
 
   orthogonality:
     enabled: true
-    weight: 1.5
+    weight: 0.5
     credit_assignment: true
     nominal_gain: 0.2
     faulty_attenuation: 0.5
@@ -153,7 +161,7 @@ rewards:
 
   no_overlap:
     enabled: true
-    weight: 2.0
+    weight: 0.5
     credit_assignment: true
     nominal_gain: 0.3
     faulty_attenuation: 0.6
@@ -171,7 +179,7 @@ rewards:
   # 방 꼭짓점은 모두 outline 안에 있으나 방 edge가 outline 오목부를 가로지를 때 발생
   outline_in_room:
     enabled: true
-    weight: 1.0
+    weight: 0.3
     credit_assignment: true
     nominal_gain: 0.2
     faulty_attenuation: 0.5
@@ -181,17 +189,17 @@ rewards:
   # 신용할당 OFF: 빈공간 책임 소재 모호 + 입력 좌표 노이즈로 토큰 단위 시그널 부정확
   coverage:
     enabled: true
-    weight: 1.5
+    weight: 3.0
     credit_assignment: false
 
   connectivity:
     enabled: true
-    weight: 1.0
+    weight: 0.5
     credit_assignment: false
 
   spatial:
     enabled: true
-    weight: 0.5
+    weight: 3.0
     credit_assignment: false
 
   # 입력 프롬프트의 좌표 명시 방(앵커+drop_type)이 출력에 일관되게 포함되는지 검증
