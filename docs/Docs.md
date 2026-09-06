@@ -824,7 +824,7 @@ data/models/{model.name}/checkpoints/sft/{run_name}/
 | 파일 | 역할 |
 |------|------|
 | `src/training/sft/model_loader.py` | HF Hub base model 로드 + `partial_state.pt` 커스텀 토큰 가중치 주입 + LoRA 적용. `load_base_model_with_partial_state()`, `build_lora_config()` 공개 API 제공 (RL에서 재사용) |
-| `src/training/sft/trainer.py` | `TrainingArguments` + 표준 `Trainer` 빌드. `_parse_save_total_limit()`: OmegaConf가 YAML `null`을 문자열 `"null"`로 전달하는 케이스를 방어적으로 처리. `optim`을 config로 받아 외부에서 선택 가능 (default `adamw_torch`) — RL과 동일 인터페이스. 단 `paged_adamw_32bit`은 SFT의 큰 batch peak + WSL2 환경에서 bitsandbytes의 CUDA Unified Memory 풀 할당이 실패(`pythonInterface.cpp:670 out of memory`)하므로 SFT는 `adamw_torch` 권장. RL은 batch peak이 작아 `paged_adamw_32bit` 안전 |
+| `src/training/sft/trainer.py` | `TrainingArguments` + 표준 `Trainer` 빌드. `_parse_save_total_limit()`: OmegaConf가 YAML `null`을 문자열 `"null"`로 전달하는 케이스를 방어적으로 처리. `optim`을 config로 받아 외부에서 선택 가능 (default `adamw_torch`) — RL과 동일 인터페이스. 단 `paged_adamw_32bit`은 optimizer state를 `cudaMallocManaged`(CUDA managed/unified memory)로 잡는데, 이는 PyTorch caching allocator 풀 바깥의 별도 할당이라 WSL2에서 GPU 메모리 압박이 높을 때 `pythonInterface.cpp:670 out of memory`로 실패한다. SFT·RL 모두 `adamw_torch` 권장. (RL도 `num_generations`↑ + 긴 시퀀스 + 대형 vocab logits로 optimizer.step 시점 PyTorch reserve가 커지면 동일 실패 — 이전의 "RL은 batch peak이 작아 안전" 서술은 정정됨. RL adapter는 ~80M라 fp32 Adam state ~640MB로 작아 `adamw_torch`로 충분) |
 | `scripts/training/run_sft.py` | Hydra 진입점, seed 고정, Resume 분기, 라이브러리 로깅 propagation 활성화, 훈련 후 adapter + optimizer 저장 |
 | `src/utils/logging.py` | `setup_library_logging_propagation()` — transformers/datasets/peft/trl/accelerate 로그를 Hydra root file handler로 전파시키는 공통 헬퍼 (embed_align/SFT/RL 모두 main 진입부에서 호출) |
 | `config/training/sft/pipeline.yaml` | LoRA, 학습률, model_dir 등 SFT 전체 설정 |

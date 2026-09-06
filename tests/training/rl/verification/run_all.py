@@ -68,6 +68,8 @@ GROUP3 = [
     VerifierSpec("Group 3", "micro_step_loss_flow",
                  _VERIF_ROOT / "group3_advantage/verify_micro_step_loss_flow.py",
                  requires_gpu=True),
+    VerifierSpec("Group 3", "rl_adapter_active_state",
+                 _VERIF_ROOT / "group3_advantage/verify_rl_adapter_active_state.py"),
 ]
 
 

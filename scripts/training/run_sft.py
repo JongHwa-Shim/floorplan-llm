@@ -233,7 +233,11 @@ def main(cfg: DictConfig) -> None:
     raw_model = trainer.accelerator.unwrap_model(trainer.model)
     if trainer.accelerator.is_main_process:
         output_dir.mkdir(parents=True, exist_ok=True)
-        raw_model.save_pretrained(str(output_dir))  # adapter_model.safetensors + adapter_config.json
+        # save_embedding_layers=False: frozen embed_tokens/lm_head(~4.36GB)는 로드 시
+        # partial_state.pt에서 주입되는 중복이므로 저장하지 않음 (어댑터만 → 파일 ~14배 축소)
+        raw_model.save_pretrained(
+            str(output_dir), save_embedding_layers=False
+        )  # adapter_model.safetensors + adapter_config.json
         trainer._save_optimizer_and_scheduler(str(output_dir))
         trainer.state.save_to_json(str(output_dir / "trainer_state.json"))
         tokenizer.save_pretrained(str(output_dir))
