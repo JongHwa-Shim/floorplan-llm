@@ -552,6 +552,20 @@ def build_room_summary_tokens(
     # outline을 제외한 방만 집계
     non_outline_rooms = [r for r in sample["rooms"] if r["type"] != "outline"]
     total_count = len(non_outline_rooms)
+    # PATCH(floorplan-llm OOD experiment): plan_id 별 total_count 강제 override.
+    # 환경변수 ``FLOORPLAN_FORCE_TOTAL_OVERRIDE`` 에 JSON dict {plan_id: int} 설정 시
+    # 해당 plan 의 <TOTAL>N 토큰이 override 값으로 강제. type counts 는 영향 X →
+    # type counts 합 ≠ total 인 inconsistent input 실험에 사용.
+    import os as _os, json as _json
+    _override_str = _os.environ.get("FLOORPLAN_FORCE_TOTAL_OVERRIDE")
+    if _override_str:
+        try:
+            _override_map = _json.loads(_override_str)
+            _pid = sample.get("plan_id")
+            if _pid is not None and str(_pid) in _override_map:
+                total_count = int(_override_map[str(_pid)])
+        except Exception:
+            pass
 
     def _append_number(n: int) -> None:
         """LLM 기본 숫자 토큰 ID를 tokens에 추가한다 (멀티토큰 숫자 대응)."""

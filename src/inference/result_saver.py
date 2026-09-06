@@ -98,7 +98,13 @@ def save_results(
         _save_json(input_dir / "condition.json", raw_sample)
 
     # 이미지 저장용 visualizer: save_image=true이면 입력/출력 모두 사용하므로 한 번만 생성
-    visualizer = FloorplanVisualizer(color_map_cfg) if output_cfg.save_image else None
+    # Mod Record (2026-05-15): output.draw_labels 옵션을 visualizer 에 전달 — 추론 결과
+    # figure 에서는 라벨이 불필요하므로 기본 false. None 이면 color_map.yaml 의 기본값 사용.
+    draw_labels = output_cfg.get("draw_labels", None)
+    visualizer = (
+        FloorplanVisualizer(color_map_cfg, show_labels=draw_labels)
+        if output_cfg.save_image else None
+    )
 
     if visualizer is not None:
         try:

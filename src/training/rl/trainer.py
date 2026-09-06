@@ -433,6 +433,9 @@ class RLTrainer(GRPOTrainer):
             rewards_per_func=rewards_all,
             num_generations=self.num_generations,
             eps=eps,
+            use_gdpo_normalization=bool(
+                self.advantage_cfg.get("use_gdpo_normalization", True)
+            ),
         )  # (B_total, K)
 
         # 로컬 프로세스 슬라이스

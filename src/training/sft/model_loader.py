@@ -62,9 +62,14 @@ def load_base_model_with_partial_state(
     partial_state_path = Path(partial_state_path)
     hub_id: str = cfg.model.hub_id
 
+    # Mod Record: w/o EA ablation (가이드 Exp 4) 지원 — cfg.model.skip_partial_state=true 면
+    # partial_state.pt 주입을 건너뛰고 새 토큰을 transformers 기본 multivariate normal 초기화로
+    # 시작한다. 본 연구의 기본 흐름은 skip=False (EA → partial_state 주입 → SFT) 이다.
+    skip_partial_state = bool(cfg.model.get("skip_partial_state", False))
+
     if not tokenizer_dir.exists():
         raise FileNotFoundError(f"토크나이저 디렉토리를 찾을 수 없음: {tokenizer_dir}")
-    if not partial_state_path.exists():
+    if not skip_partial_state and not partial_state_path.exists():
         raise FileNotFoundError(f"partial_state.pt를 찾을 수 없음: {partial_state_path}")
 
     # 토크나이저 로드 (tokenization/ 경로에 커스텀 토큰 포함)
@@ -87,29 +92,35 @@ def load_base_model_with_partial_state(
     # Mod Record: transformers 5.x에서 mean_resizing=True(기본값)가 기존 embedding matrix를
     # GPU에 float32로 복사해 공분산 계산 → embed_tokens + lm_head 각각 ~2GB씩 임시 텐서 생성.
     # 어차피 partial_state.pt로 새 토큰 행을 덮어쓰므로 초기화 방식 무관 → False로 비활성화.
-    model.resize_token_embeddings(len(tokenizer), mean_resizing=False)
+    # Mod Record: skip_partial_state=True (w/o EA ablation) 시 mean_resizing=True 로 전환해
+    # 새 토큰을 fp32 multivariate normal 분포로 초기화한다. 기본 흐름은 mean_resizing=False
+    # (partial_state 가 어차피 새 토큰을 덮어쓰므로 fp32 임시 텐서 비용을 피함).
+    model.resize_token_embeddings(len(tokenizer), mean_resizing=skip_partial_state)
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     logger.info(f"vocab 확장 완료. vocab_size: {model.config.vocab_size}")
 
-    # partial_state.pt 로드하여 커스텀 토큰 행에 Embedding Alignment 훈련된 가중치 주입
-    # embed_tokens / lm_head는 4bit 양자화 대상이 아니므로 (bf16) 직접 인덱싱 가능
-    logger.info(f"partial_state.pt 로드 및 커스텀 토큰 가중치 적용 중: {partial_state_path}")
-    partial_state = torch.load(str(partial_state_path), map_location="cpu", weights_only=True)
-    new_token_ids: list[int] = partial_state["new_token_ids"]
+    if skip_partial_state:
+        logger.info("skip_partial_state=True — partial_state.pt 주입 건너뜀 (w/o EA ablation)")
+    else:
+        # partial_state.pt 로드하여 커스텀 토큰 행에 Embedding Alignment 훈련된 가중치 주입
+        # embed_tokens / lm_head는 4bit 양자화 대상이 아니므로 (bf16) 직접 인덱싱 가능
+        logger.info(f"partial_state.pt 로드 및 커스텀 토큰 가중치 적용 중: {partial_state_path}")
+        partial_state = torch.load(str(partial_state_path), map_location="cpu", weights_only=True)
+        new_token_ids: list[int] = partial_state["new_token_ids"]
 
-    # Mod Record: partial_state.pt는 float32로 저장되지만 NF4 모델의 embed_tokens/lm_head는
-    # resize 후 bfloat16이므로, dtype을 대상 텐서에 맞춰 변환해야 index put이 정상 동작한다.
-    with torch.no_grad():
-        model.model.embed_tokens.weight.data[new_token_ids] = partial_state["new_embed"].to(
-            dtype=model.model.embed_tokens.weight.dtype,
-            device=model.model.embed_tokens.weight.device,
-        )
-        model.lm_head.weight.data[new_token_ids] = partial_state["new_lm_head"].to(
-            dtype=model.lm_head.weight.dtype,
-            device=model.lm_head.weight.device,
-        )
-    logger.info(f"커스텀 토큰 가중치 적용 완료 ({len(new_token_ids)}개 행)")
+        # Mod Record: partial_state.pt는 float32로 저장되지만 NF4 모델의 embed_tokens/lm_head는
+        # resize 후 bfloat16이므로, dtype을 대상 텐서에 맞춰 변환해야 index put이 정상 동작한다.
+        with torch.no_grad():
+            model.model.embed_tokens.weight.data[new_token_ids] = partial_state["new_embed"].to(
+                dtype=model.model.embed_tokens.weight.dtype,
+                device=model.model.embed_tokens.weight.device,
+            )
+            model.lm_head.weight.data[new_token_ids] = partial_state["new_lm_head"].to(
+                dtype=model.lm_head.weight.dtype,
+                device=model.lm_head.weight.device,
+            )
+        logger.info(f"커스텀 토큰 가중치 적용 완료 ({len(new_token_ids)}개 행)")
 
     # kbit 훈련 준비:
     # - gradient checkpointing 활성화

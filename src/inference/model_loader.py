@@ -171,6 +171,7 @@ def _load_adapters_mode(
         logger.warning("inference.adapters가 비어있음. partial_state만 주입된 base model 반환.")
         return model, tokenizer
 
+    adapter_names_loaded: list[str] = []
     for i, adapter_entry in enumerate(adapters):
         adapter_path = Path(adapter_entry.path)
         adapter_name = adapter_entry.get("name", f"adapter_{i}")
@@ -192,7 +193,22 @@ def _load_adapters_mode(
             logger.info("추가 adapter 로드 (load_adapter): %s", adapter_path)
             model.load_adapter(str(adapter_path), adapter_name=adapter_name)
 
+        adapter_names_loaded.append(adapter_name)
         logger.info("adapter '%s' 로드 완료", adapter_name)
+
+    # Mod Record (2026-05-15) — CRITICAL FIX:
+    # PEFT 의 load_adapter 는 adapter 가중치를 메모리에 적재할 뿐, forward 시 활성화되는
+    # adapter (active_adapter) 는 첫 번째 from_pretrained 시 설정된 것만 유지된다. 즉
+    # 명시적 set_adapter 가 없으면 두 번째 adapter (RL) 가 forward 에 반영되지 않는다.
+    # 학습용 RL model_loader 는 ``model.base_model.set_adapter(["sft","rl"])`` 로 두
+    # adapter 를 동시 활성화한다 — 추론도 동일 의미를 보장해야 evaluation 이 학습 의도와
+    # 일치한다. 단일 adapter 케이스는 자동 활성화이므로 set_adapter 호출 불필요.
+    if len(adapter_names_loaded) > 1:
+        model.base_model.set_adapter(adapter_names_loaded)
+        logger.info(
+            "다중 어댑터 동시 활성화 (set_adapter): %s",
+            adapter_names_loaded,
+        )
 
     # Mod Record: PeftModel.from_pretrained으로 로드한 adapter 가중치와
     # attention bias가 float32로 유지될 수 있다. NF4 Params4bit를 제외한

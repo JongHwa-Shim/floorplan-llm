@@ -137,44 +137,60 @@ def load_model_and_tokenizer(cfg: DictConfig) -> tuple:
         FileNotFoundError: embed_align_dir/partial_state.pt 또는 sft_adapter_dir가 없을 경우.
     """
     embed_align_dir = Path(cfg.model.embed_align_dir)
-    sft_adapter_dir = Path(cfg.model.sft_adapter_dir)
+    # Mod Record: w/o SFT ablation (가이드 Exp 4) 지원 — cfg.model.sft_adapter_dir 가 빈 문자열
+    # 또는 "none"/"null" 이면 SFT adapter 단계를 건너뛰고 base(NF4 + partial_state)에 RL adapter
+    # 만 추가한다.
+    sft_raw = str(cfg.model.sft_adapter_dir or "").strip()
+    skip_sft = sft_raw == "" or sft_raw.lower() in {"none", "null"}
+    sft_adapter_dir = Path(sft_raw) if not skip_sft else None
     partial_state_path = embed_align_dir / "partial_state.pt"
 
     if not partial_state_path.exists():
         raise FileNotFoundError(f"partial_state.pt를 찾을 수 없음: {partial_state_path}")
-    if not sft_adapter_dir.exists():
+    if not skip_sft and not sft_adapter_dir.exists():
         raise FileNotFoundError(f"SFT adapter 디렉토리를 찾을 수 없음: {sft_adapter_dir}")
 
     # 1. Hub NF4 base + partial_state.pt 주입 (SFT와 공통 로직 재사용)
     logger.info(f"Hub 모델 로드 + partial_state.pt 주입: {cfg.model.hub_id}")
     base_model, tokenizer = load_base_model_with_partial_state(cfg, partial_state_path)
 
-    # 2. SFT adapter 로드 (frozen)
-    # adapter_name="sft"로 네임스페이스 분리, is_trainable=False로 gradient 차단
-    logger.info(f"SFT adapter 로드 (frozen): {sft_adapter_dir}")
-    model = PeftModel.from_pretrained(
-        base_model,
-        str(sft_adapter_dir),
-        adapter_name="sft",
-        is_trainable=False,
-    )
-
-    # 3. RL adapter 추가 (trainable)
-    # SFT adapter와 동일한 target_modules에 독립적인 LoRA adapter를 추가
     rl_config = build_lora_config(cfg.lora)
-    model.add_adapter("rl", rl_config)
 
-    # Mod Record: PeftModel.set_adapter("rl")는 str만 받으며 SFT adapter를 비활성화한다.
-    # RL forward에서 base(NF4 + partial_state) + SFT(frozen) + RL(trainable) 전체가
-    # 반영되어야 올바른 policy로 rollout이 생성되므로, BaseTuner.set_adapter에 리스트를 전달해
-    # 두 어댑터를 모두 활성화한다. BaseTuner는 LoraLayer.forward의 active_adapters 순회를 제어한다.
-    model.base_model.set_adapter(["sft", "rl"])
-    # BaseTuner.set_adapter는 리스트의 모든 adapter를 trainable로 설정하므로
-    # SFT 가중치를 다시 frozen으로 되돌린다.
-    for name, param in model.named_parameters():
-        if ".sft." in name:
-            param.requires_grad_(False)
-    logger.info("멀티 어댑터 활성화 완료: sft(frozen) + rl(trainable)")
+    if skip_sft:
+        # w/o SFT ablation: base + partial_state → 곧바로 RL adapter 부착
+        logger.info("sft_adapter_dir 미지정 — w/o SFT ablation 으로 진행 (base + partial_state + RL)")
+        model = PeftModel(base_model, rl_config, adapter_name="rl")
+    else:
+        # 2. SFT adapter 로드 (frozen) — 표준 흐름
+        # adapter_name="sft"로 네임스페이스 분리, is_trainable=False로 gradient 차단
+        logger.info(f"SFT adapter 로드 (frozen): {sft_adapter_dir}")
+        model = PeftModel.from_pretrained(
+            base_model,
+            str(sft_adapter_dir),
+            adapter_name="sft",
+            is_trainable=False,
+        )
+
+        # 3. RL adapter 추가 (trainable)
+        # SFT adapter와 동일한 target_modules에 독립적인 LoRA adapter를 추가
+        model.add_adapter("rl", rl_config)
+
+    if skip_sft:
+        # w/o SFT 흐름: RL adapter 단일 활성화. 추가 frozen 재설정 불필요.
+        model.base_model.set_adapter(["rl"])
+        logger.info("어댑터 활성화 완료: rl(trainable) — w/o SFT ablation")
+    else:
+        # Mod Record: PeftModel.set_adapter("rl")는 str만 받으며 SFT adapter를 비활성화한다.
+        # RL forward에서 base(NF4 + partial_state) + SFT(frozen) + RL(trainable) 전체가
+        # 반영되어야 올바른 policy로 rollout이 생성되므로, BaseTuner.set_adapter에 리스트를 전달해
+        # 두 어댑터를 모두 활성화한다. BaseTuner는 LoraLayer.forward의 active_adapters 순회를 제어한다.
+        model.base_model.set_adapter(["sft", "rl"])
+        # BaseTuner.set_adapter는 리스트의 모든 adapter를 trainable로 설정하므로
+        # SFT 가중치를 다시 frozen으로 되돌린다.
+        for name, param in model.named_parameters():
+            if ".sft." in name:
+                param.requires_grad_(False)
+        logger.info("멀티 어댑터 활성화 완료: sft(frozen) + rl(trainable)")
 
     # Mod Record: TRL GRPOTrainer.__init__은 beta != 0.0일 때
     # `model.add_adapter("ref", model.peft_config["default"])`를 호출해 KL용 ref adapter를
@@ -183,8 +199,13 @@ def load_model_and_tokenizer(cfg: DictConfig) -> tuple:
     # (가중치 복사는 RLTrainer.__init__에서 .sft. → .ref. 로 직접 수행 — TRL 기본 코드는
     #  .default. 매칭만 하므로 우리 구조에서 누락됨)
     if "default" not in model.peft_config:
-        model.peft_config["default"] = model.peft_config["sft"]
-        logger.info("TRL ref adapter 호환을 위해 peft_config['default']=peft_config['sft'] alias 등록")
+        # Mod Record: skip_sft 시에는 "sft" 키가 없으므로 "rl" 으로 alias.
+        alias_src = "sft" if not skip_sft else "rl"
+        model.peft_config["default"] = model.peft_config[alias_src]
+        logger.info(
+            "TRL ref adapter 호환을 위해 peft_config['default']=peft_config['%s'] alias 등록",
+            alias_src,
+        )
 
     # Mod Record: add_adapter()가 새 Linear 모듈을 float32로 초기화하고,
     # PeftModel.from_pretrained으로 로드한 SFT adapter 가중치와 attention bias도
