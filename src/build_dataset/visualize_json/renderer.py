@@ -145,13 +145,64 @@ class RoomRenderer:
         """
         s = self.supersample
         points = []
-        for i in range(0, len(coords), 2):
+        # range 상한을 len-1 로 두어 홀수 길이 coords(파싱 오류/garbage 출력)에서 마지막 미쌍
+        # 좌표를 안전하게 무시한다 (IndexError 방지).
+        for i in range(0, len(coords) - 1, 2):
             points.append([int(coords[i]) * s, int(coords[i + 1]) * s])
         return np.array(points, dtype=np.int32).reshape((-1, 1, 2))
+
+    def points_from_xy(self, xy: list[tuple[float, float]]) -> np.ndarray:
+        """(x, y) 튜플 리스트 → OpenCV polygon 형식 (supersample 적용).
+
+        겹침 영역 (shapely intersection) 의 exterior 좌표를 채울 때 사용한다.
+        """
+        s = self.supersample
+        pts = [[int(round(x)) * s, int(round(y)) * s] for x, y in xy]
+        return np.array(pts, dtype=np.int32).reshape((-1, 1, 2))
 
     # ------------------------------------------------------------------
     # 도형 그리기
     # ------------------------------------------------------------------
+
+    def fill_polygon_solid(
+        self,
+        canvas: np.ndarray,
+        coords: list[int],
+        fill_color: tuple[int, int, int],
+    ) -> np.ndarray:
+        """방 폴리곤을 **solid (불투명)** 로 채운다. alpha 블렌딩 없음 → 색 왜곡 없음."""
+        pts = self.coords_to_points(coords)
+        fill_bgr = (fill_color[2], fill_color[1], fill_color[0])
+        cv2.fillPoly(canvas, [pts], fill_bgr, lineType=cv2.LINE_8)
+        return canvas
+
+    def fill_region_solid(
+        self,
+        canvas: np.ndarray,
+        xy: list[tuple[float, float]],
+        fill_color: tuple[int, int, int],
+    ) -> np.ndarray:
+        """임의 (x, y) 폴리곤 영역을 solid 로 채운다 (겹침 블렌딩 색 도포용)."""
+        if len(xy) < 3:
+            return canvas
+        pts = self.points_from_xy(xy)
+        fill_bgr = (fill_color[2], fill_color[1], fill_color[0])
+        cv2.fillPoly(canvas, [pts], fill_bgr, lineType=cv2.LINE_8)
+        return canvas
+
+    def draw_polygon_border(
+        self,
+        canvas: np.ndarray,
+        coords: list[int],
+        border_color: tuple[int, int, int],
+    ) -> np.ndarray:
+        """방 폴리곤 **테두리만** 그린다 (최상단 재도색용)."""
+        pts = self.coords_to_points(coords)
+        border_bgr = (border_color[2], border_color[1], border_color[0])
+        thickness = self.border_thickness * self.supersample
+        cv2.polylines(canvas, [pts], isClosed=True, color=border_bgr,
+                      thickness=thickness, lineType=cv2.LINE_8)
+        return canvas
 
     def draw_room_polygon(
         self,

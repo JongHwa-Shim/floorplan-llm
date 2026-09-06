@@ -17,7 +17,7 @@
 
 ## A. 현재 진행 현황 (한눈에)
 
-마지막 갱신: 2026-07-06 (for_paper 시각화 실험 5종 + color_map 팔레트 개선)
+마지막 갱신: 2026-07-14e (exp2 SFT 체크포인트 비교 — sft_old=checkpoint-35133 을 저장 입력 그대로 20 plan×20 생성, {plan_id}/sft_old/. 직전: exp2 v2 room polygon sparse 수정, bubble 겹침 수정)
 
 | 영역 | 상태 | 비고 |
 |---|---|---|
@@ -68,6 +68,287 @@
 ---
 
 ## B. 시계열 작업 로그
+
+### 2026-07-14e (exp2 SFT 체크포인트 비교 — sft_old = checkpoint-35133)
+
+exp2 신규 20 plan 의 **저장된 input.txt 조건 그대로** 재사용해 다른 SFT 체크포인트로 20 sample 을
+생성, `{plan_id}/sft_old/` 에 저장 → 같은 입력에 대한 SFT 체크포인트 비교.
+
+- **체크포인트**: `data/models/Qwen2.5-Coder-7B/checkpoints/sft/checkpoint-35133` (r=32, **use_dora=
+  True**, base=pre_stage/final). 기존 `sft/`(final, LoRA) 와 대비. DoRA 라 추론이 다소 느림.
+- **구현**: `build_inference_cfg`/`load_stage_model` 에 `sft_path` override 추가. 입력은 input.txt
+  파싱 복원(증강 재실행 X → sft/ 와 완전 동일 입력). `redo_exp2_sft_old.py`.
+- **결과**: 20/20 plan, 크래시 0, render fail 0, png 전용. plan 당 embed_align/·sft/(final)·
+  sft_old/(35133) 각 20 → EA vs SFT(final) vs SFT(35133) 비교 가능. 시각: 동일 입력에 두 체크포인트
+  출력이 다름(방 배치·종류 상이) 확인. 스모크: 35133 로드+생성 정상(159토큰, 7방 파싱).
+
+### 2026-07-14d (exp2 v2 재수행 — room polygon sparse 수정: outline 유지 + 방 2개)
+
+**문제**: 직전 exp2 redo(drop_coords=0.65)가 방 좌표를 과하게 드롭 + drop_block=0.15 가 outline
+까지 제거해, 일부 plan 입력이 "거의 문만 남는" 빈 상태가 됐다(예: 4654 → outline·방 없이 door 3개).
+
+**해결**: `run_exp2` 에 `coords_keep` 파라미터 + `_limit_room_polygons` 후처리 추가 —
+(1) outline(rid 0)을 drop_block/drop_coords 에서 제외해 **실루엣 항상 표시**, (2) non-outline
+non-block 방 중 **무작위 keep_n(=2)개만 coords 유지**, 나머지 drop_coords → 재토큰화. 확률적 drop
+의 0-polygon 케이스를 원천 차단. config(`V2_AUG_YAML`)는 drop_coords=0(후처리가 제어), bubble 은
+edge/block drop 낮게(풍부) 유지. dry-check: 모든 plan outline 유지 + room_polygon=2 + edge 3~7.
+
+**아카이브·재생성**: 현재 exp2 10 plan → `generated_floorplan_per_stage/old_old/`(기존 `old/`=최초
+exp2 는 그대로). for_paper 전 실험 182 plan 제외한 신규 **20 plan × EA·SFT 각 20 sample**
+(`redo_exp2_v2.py`). 결과: 40/40 stage, 크래시 0, render fail 0, png 전용. 구조: 신규 20 / old 10
+/ old_old 10. 입력은 outline + 방 2개(개선 확인), bubble 은 신 레이아웃.
+
+### 2026-07-14c (bubble diagram 노드 겹침 수정 + 38594 41~80 + 전체 bubble 갱신)
+
+- **bubble 레이아웃 개선 (`draw_bubble_diagram`)**: node 수가 많으면 서로 붙어 겹치던 문제 해결.
+  기존 `draw_networkx_nodes`(point 단위 고정 마커 + [-1,1] 고정 프레임)를 버리고, node 를 **data
+  좌표 원(Circle patch)** 으로 그린다. spring_layout 후 **최근접 node 간 거리=MIN_SEP** 가 되도록
+  전체 좌표를 스케일(지름<간격 → 항상 분리), figure 크기를 layout bbox 에 비례시켜 렌더 비율 일정.
+  검증: 첨부 8노드·38594·13노드 밀집 스트레스 모두 겹침 없이 분리.
+- **38594 41~80 추가**: `sparse/38594` 의 저장된 input.txt(실루엣 조건) 재사용해 output 40개
+  추가(41~80). `extend_exp3_samples.py` 에 `--plan` 필터 + start_idx 반영 seed(재확장 시 seed 대역
+  분리) 추가. 사용자 지정 인덱스대로 41~80 생성 → 38594 는 1~20 + 41~80 = 60개(**21~40 은 빈 간격**,
+  요청 인덱스 그대로).
+- **전체 bubble 갱신 (`regenerate_bubbles.py`)**: 개선 레이아웃으로 일괄 재생성(평면도 png 는 안
+  건드림). input bubble(input.txt connectivity) 210 + exp1 output bubble(output.txt 에 edge 없어
+  eval_pool 원본 full connectivity 로 복원) 50 = 260개, 실패 0, png 전용(pdf/svg 0).
+
+### 2026-07-14b (1-to-many sparse 배치 — room polygon 실루엣만)
+
+사용자 요청 1-to-many 추가 배치. 입력을 "실루엣 중심 sparse"로 구성해 `1-to-many-generation/
+sparse/` 에 별도 저장. 10 plan × 10 output(SFT), for_paper 전 실험 172 plan 제외한 신규 plan.
+
+- **증강 (`add_exp3_sparse.py::SPARSE_YAML`)**: room polygon 은 outline(실루엣)만 —
+  p_drop_coords=1.0 + **outline(rid 0) 좌표 복원**(compute_drop_state 가 outline 에도 drop_coords 를
+  적용하므로 조건 생성 후 `drop_state.drop_coords.discard(0)` + 재토큰화). spatial 절반~절반이하
+  삭제(0.45), room counts 1~2개만 삭제(total 유지 + type 0.2, 많이 남김), room connection(edge)
+  절반이하 삭제(0.4). door/front_door 좌표 제거(실루엣만, 연결관계 pair 는 유지).
+- **검증**: dry-check room_polygon=0·outline 좌표 유지·edge 2~5·spatial 8~18·type_count 3~5.
+  시각: rooms.png 는 grey 실루엣만, bubble 은 적당한 connectivity. 생성 샘플은 완전 평면도(door
+  solid) 이며 같은 실루엣에서 다양한 배치(1-to-many). 10/10 plan, 크래시 0, render fail 0, png
+  전용(pdf/svg 0).
+
+### 2026-07-14 (door 겹침 블렌딩 제외 + png 전용 전환 + 전체 재렌더)
+
+- **door 블렌딩 제외**: 겹침 색상 블렌딩에서 현관문·interior door 제외 → solid 원색으로 선명.
+  `_collect_fill_items` 가 각 fill_item 에 `is_door` 플래그를 달고, `_compute_blend_regions` 가
+  `is_door=True` 를 skip(방-방 겹침만 블렌딩). raster·vector 공용. 검증: door-방 겹침 블렌드 영역
+  2→0, 합성 예시로 door 가 탁한 혼합색→선명한 solid 로 바뀜 확인.
+- **png 전용 전환**: `VECTOR_EXTS=("pdf","svg")` → `()`. pdf/svg 생성 중단(사용자 요청),
+  기존 for_paper pdf·svg 각 5040개 전부 삭제(temp POC 포함). `render_floorplan_to_vector` 는 유지.
+- **전체 재렌더** (`regenerate_for_paper_pngs.py`, 모델 없이 토큰 재렌더): door 수정 반영해 png
+  전체 재생성. exp1 output/floorplan 재렌더 로직 추가, 이미지별 try/except + 렌더러 홀수 좌표
+  안전 처리(garbage EA 출력의 malformed coords 로 `IndexError` 크래시 → `coords_to_points` 의 range
+  상한 len-1). 결과: rooms 200 + 생성/output 4590 + bubble 200 재렌더, 실패 0, png 5040 유지,
+  pdf/svg 0.
+
+### 2026-07-13 (exp2 재수행 — 입력 조건 bubble↑·polygon↓ + 신규 10 plan)
+
+**배경**: exp2(training-stage 비교, EA vs SFT)의 입력 조건 시각화가 bubble diagram(connectivity)을
+너무 적게 남기고 room polygon(좌표)은 많이 남긴다는 피드백. EA/SFT 경로는 그대로(final) 두고
+입력 증강만 조정해 재수행.
+
+- **증강 변경**: sft.yaml 기반에서 `p_drop_edge` 0.5→0.15 · `p_drop_block` 0.5→0.15 (엣지·방 유지
+  → **bubble node/edge 풍부**), `p_drop_coords` 0.2→0.65 (좌표 절제 → **room polygon 감소**),
+  `p_drop_pair` 0.2→0.1. dry-check: bubble edge 0.8→3.5, node 3.7→5.8, polygon 2.2→~1.6 (신규
+  10 plan 실측 polygon 0~3, 대부분 1~2 / edge 3~5).
+- **run_exp2 파라미터화**: `n_plans/n_samples/seed/exclude_pids/aug_yaml/idempotent`. bucket 소진
+  대비 **top-up 보충** 추가(run_exp3 에도 동일 보강).
+- **old/ 이동 + 전 실험 제외**: 기존 exp2 10 plan → `generated_floorplan_per_stage/old/`. for_paper
+  전 실험 plan_id 162개(숫자 폴더 재귀 수집, old 포함) 모두 제외하고 신규 10 plan 선택
+  (bucket 5 는 제외로 소진돼 6/7/8 에서 top-up). 각 plan EA·SFT 각 10 output(3포맷).
+- **시행착오**: (1) top-up 없어 7 plan 만 선택 → 보충 로직 추가 후 10 확보. (2) drop_coords
+  0.68 은 다소 공격적(일부 plan polygon 0) → 0.65 로 완화. (3) EA garbage 출력 1건이 parser
+  `IndexError`(list index out of range) 유발 → 빈 평면도로 처리해 EA 10/10 완비.
+- **결과**: 신규 10 plan 모두 EA·SFT 각 10 png/pdf/svg + input 완비, old/ 10 보존, 전 실험 겹침 0.
+  신규 스크립트 `redo_exp2.py`.
+
+### 2026-07-13 (exp5 imprecise 재수행 — 노이즈 σ 30→10 완화, 20 신규 plan)
+
+**배경**: exp5 imprecise 는 anchor 방 좌표에 σ=30px Gaussian 노이즈를 줬는데 형태가 과도하게
+일그러져(방이 거대한 삼각형 스파이크로 변형) "부정확하지만 알아볼 수 있는" 입력이라기엔 너무
+심했다. 사용자 요청으로 σ=10px(학습 σ=3 의 ~3.3배)로 완화 재수행.
+
+- **old/ 이동**: 기존 imprecise_input 10 plan 을 `imprecise_input/old/` 로 이동(보존).
+- **코드 표준화**: `_apply_strong_noise_to_anchors` 기본 sigma 30→10, `run_exp5` imprecise 호출도
+  σ=10, docstring 갱신 → 향후 `--exp 5` 도 완화된 노이즈 사용.
+- **재생성 (`redo_imprecise.py`)**: 기존 imprecise 10 plan 제외한 **신규 20 plan**(bucket 5/5/5/5)
+  을 imprecise config 로 증강 → anchor 방 절반에 σ=10 노이즈 → 재토큰화 → 각 20 output 생성.
+  결과: 20/20 plan, 크래시 0, render fail 0, png/pdf/svg 각 20 완비. 시각 검증: σ=10 은 방 형태가
+  약간 흔들리나 인식 가능(최대 좌표 변화 17px), σ=30(old) 대비 확연히 완화.
+- 참고: 이번엔 "기존 imprecise 10 plan"만 제외(전 실험 제외 요청 없었음) — 타 실험과 plan_id 일부
+  중복 가능. 조건당 output 은 기존 관행 20 유지.
+- **용어 주의**: 사용자가 "contradictory" 로 지칭했으나 경로(imprecise_input)+노이즈 σ 메커니즘상
+  imprecise 실험으로 확정(contradictory 는 노이즈가 아닌 TOTAL 강제).
+
+### 2026-07-07 (exp3 확장: 저장 조건 재사용 20 추가 + 새 배치 40 plan × 40 + spatial 절제 표준화)
+
+**1. exp3 21~40 추가 (저장된 입력 조건 그대로)**: 기존 exp3 10 plan 에 대해 **input.txt 에서
+condition 토큰을 복원**(증강 재실행 X — seed=None 이라 재증강 시 조건이 달라지므로)해 SFT(final)
+로 20 sample 을 이어 생성(`output/sft/{21..40}`). input.txt↔토큰 왕복 일치 검증. 원본 1~20 과
+겹치지 않는 seed(50000+) 사용. 신규 스크립트 `extend_exp3_samples.py`. 결과: 10 plan 모두 40
+sample (png/pdf/svg 각 40) 완비, 21≠1 신규성 확인.
+
+**2. exp3 증강 config 표준 변경 (spatial 항상 절제)**: 사용자 방침 — exp3 는 항상 spatial
+relation 도 절제한다(기존 `_DENSITY_MID_YAML` 은 이미 p_drop_spatial=0.3 이었으나 상향). counts
+(total 0.0→0.4, type 0.15→0.5) / connectivity(edge 0.25→0.5, +pair 0.2) / spatial(0.3→0.55) 을
+더 과감하게, drop 종류를 더 다양하게(type/door/front_door/pair 활성) 조정. 검증: plan 별
+drop_spatial 12~21 · drop_edge 2~5 · counts drop 활성, plan 마다 절제량 상이(다양성).
+
+**3. exp3 새 배치 (40 신규 plan × 40 sample)**: `run_exp3` 를 파라미터화(n_plans/n_samples/seed/
+exclude_pids/idempotent). 신규 `add_exp3_batch.py` 가 **for_paper 전 실험(exp1~5)에서 이미 쓰인
+plan_id 110개를 모두 제외**(사용자: "현재 저장된 결과들과 동일 plan id 로 뽑지 말 것" — 안전하게
+전 실험 제외)하고 새 40 plan(bucket 10/10/10/10, 겹침 0)을 선택, 각 40 output 생성. **완료**:
+40/40 plan, 크래시 0, render fail 0, 신규 40 plan 모두 40 png/pdf/svg 완비. **시행착오**: 1차
+실행이 exp3 10개만 제외해 일부 picks 가 exp4/exp5 와 겹침 → TaskStop 으로 중단, orphan 40 폴더
+(0 png) 제거, 제외를 전 실험으로 broaden 후 재실행. 최종 exp3 = **50 plan(기존 10 + 신규 40) ×
+40 sample**, output/sft png/pdf/svg 각 2000.
+
+### 2026-07-06f (모든 평면도·bubble png/pdf/svg 3포맷 벡터 출력 + Tcl 크래시 수정 + exp1 50 plan)
+
+**배경**: 사용자가 "확대하면 흐릿하게 깨진다"고 지적. 원인은 (1) 산출물이 래스터 png 라 확대 시
+픽셀 깨짐, (2) 뷰어별 확대 보간 차이 (VSCode=nearest 선명 vs PPT/윈도우=bicubic 흐림). 근본 해결은
+**벡터(SVG/PDF)** — 평면도(폴리곤)·bubble(노드+엣지)은 본질적으로 벡터 콘텐츠.
+
+**1. 벡터 렌더러 (`FloorplanVisualizer.render_floorplan_to_vector`)**: OpenCV raster 와 동일한
+색·겹침 블렌딩·테두리 로직을 matplotlib patch 로 재현(y축 반전으로 이미지 좌표계·프레이밍 일치).
+공용 헬퍼 `_collect_fill_items` / `_compute_blend_regions` 로 raster/vector 로직 공유(중복 제거,
+raster 동작 보존). POC 로 raster 와 동일 렌더 시각 확인.
+
+**2. for_paper 3포맷 출력**: 모듈 상수 `VECTOR_EXTS=("pdf","svg")`. `visualize_floorplan_to_png`
+(→ png + render_floorplan_to_vector 로 pdf/svg), `draw_bubble_diagram`(→ 확장자만 바꿔 3포맷) 수정.
+`parse_output_and_save_png` 는 위임이라 자동 3포맷. FID 등 지표는 png 만 사용(벡터는 figure 전용).
+
+**3. CRITICAL — matplotlib Tcl 크래시**: 벡터 병행으로 figure 생성/close 횟수가 폭증하면서 기본
+Tk 백엔드가 `Tcl_AsyncDelete: async handler deleted by the wrong thread` 로 프로세스를 크래시시킴
+(**exp4 재생성이 connectivity_counts 3/10 지점에서 중단**). `for_paper_experiments.py` 상단에서
+`matplotlib.use("Agg")` 를 pyplot import 전에 강제하여 해결(non-interactive, Tk 스레딩 이슈 제거).
+exp4 에 idempotent skip(output png ≥ N_SAMPLES) 추가 후 재실행 — 완료 23 plan skip, 미완료 17 plan
+(connectivity_counts 7 + connectivity_only 10) 생성, 크래시 재발 0. (재실행 시 `pkill -f
+for_paper_experiments` 가 자기 launcher 명령줄을 매칭해 자기 셸을 죽이는 실수 → pkill 없이 재시작.)
+
+**4. exp1 50 plan (모델 미사용 → GPU 작업과 병렬)**: `pick_exp1_plans` 를 임의 n 에 견고하게
+(bucket 5/6/7/8 균등 분배 + availability 부족 시 보충), `--n_plans` CLI 인자 추가. exp1(50)을 exp4
+(GPU) 와 **동시 백그라운드 실행** — CPU-only 라 충돌 없음. 50 plan × (input rooms·bubble +
+output floorplan·bubble) × 3포맷 = png/pdf/svg 각 200. 구 10-plan 은 `temp/for_paper_exp1_10plan_backup/`.
+
+**5. 벡터 소급 (`add_missing_vectors.py` 신설)**: 구 코드(2026-07-06 벡터 추가 전)로 생성된 exp2/
+exp3 + 모든 sft_110418 아카이브(png 만, 980개)에 pdf/svg 만 채운다. **png 은 건드리지 않고**
+(render_floorplan_to_vector 벡터 전용) 이미 3포맷인 exp1/4/5 는 skip. 전체 재렌더(느림+round-trip
+위험) 회피. 결과: floorplan 960 + bubble 20 소급, skip 1520, 미처리 0. 소급 벡터가 기존 png 와
+내용 동일함 시각 검증.
+
+**최종 산출** (`experiments/for_paper/`, 모두 png=pdf=svg 완비): exp1 200, exp2 470, exp3 270,
+exp4 1040, exp5 520 (각 포맷). 총 png/pdf/svg 각 2500 (sft_110418 아카이브 340 포함).
+
+### 2026-07-06e (for_paper 재생성 — SFT final 체크포인트 + sft_110418 아카이브 + 20 sample + exp1 재구조화)
+
+**배경**: 기존 for_paper 결과는 SFT `checkpoint-110418` 로 생성됐다. 사용자가 (1) 그 결과를
+아카이브 보존하고 (2) 최종 학습본 SFT `final` 체크포인트로 재생성, (3) 입력 조건당 sample 을
+20개로 증량, (4) exp1 저장 구조 개선을 요청.
+
+**1. sft/ → sft_110418 아카이브 (task 1)**: exp2~5 의 모든 `sft/` 폴더 (80개) 를 `sft_110418/`
+로 이름 변경하여 checkpoint-110418 결과를 따로 보존. exp2 는 `{plan_id}/sft_110418/`, exp3~5 는
+`{plan_id}/output/sft_110418/` 구조. embed_align/ 와 input/ 은 재생성 시 갱신되므로 아카이브의
+input 대응은 스냅샷(과거 augmentation) 임을 유의.
+
+**2. SFT 체크포인트 교체 + 20 sample (task 2)**: `for_paper_experiments.py::build_inference_cfg`
+의 SFT 경로를 `checkpoint-110418` → `final` 로 변경. 모듈 상수 `N_SAMPLES=20` 신설하여 exp2
+(EA+SFT 각 20), exp3 (20), exp4 (20), exp5 (contradictory/imprecise 각 20) 전부 20 sample 로
+증량 (기존 4~5). exp5 skip 임계값도 4→20. **RL 은 lora_B=0 무효라 생성 제외 유지** (GEN_STAGES=
+["sft"], EXP2_STAGES=["embed_align","sft"]). 스모크: final 체크포인트 로드 + 1 sample 생성 →
+122 토큰, 6 방 파싱 성공 확인. exp2~5 백그라운드 순차 실행 (`experiments/run_for_paper_exp2to5.sh`).
+증강이 seed=None 이라 재실행 시 입력 조건이 새로 생성됨 — exp2 는 stage 루프 전 condition 을
+한 번만 만들어 EA/SFT 가 동일 입력 공유 (run 내부 일관성 유지).
+
+**3. exp1 재구조화 (task 3)**: `input_output_example/{plan_id}/` 하위를 `input/` 과 `output/`
+로 분리. `input/` = input.txt + rooms.png + bubble_diagram.png (drop 반영 입력 조건),
+`output/` = output.txt + floorplan.png + bubble_diagram.png (full 정답). 신규 헬퍼
+`save_output_artifacts()` — GT output tokens 텍스트/렌더 + drop 미적용 full connectivity bubble
+diagram. plan 수 5→10 (bucket 5/6/7/8 = 2/3/3/2). 구 5-plan 결과는 `temp/for_paper_exp1_old_
+backup_20260706/` 백업 후 제거. 모델 추론 없음 (입력조건+GT 시각화만) — 즉시 완료, 10 plan ×
+6 파일 검증 (빈 파일 0). 시각 검증: input rooms/bubble (부분 정보 4 node) vs output floorplan/
+bubble (full 6 node) 정상 대비.
+
+### 2026-07-06d (door 렌더링을 방과 통합 + door_color 밝은 회백색)
+
+**문제**: interior door 가 어두워 안 보임 — door_color [121,85,72] 갈색 + `draw_door_rect` 의
+alpha 0.6 블렌딩으로 방 색과 섞여 탁함. front_door 색은 두 곳 정의 (border_colors.front_door
+79행 = 미사용 dead entry, front_door_color 93행 = 실제 적용).
+
+**해결 (사용자 요청)**:
+- `door_color` [121,85,72] → **[235,235,235] 밝은 회백색** (color_map.yaml). front_door_color
+  [186,236,140] 유지.
+- door (interior + front) 를 **방과 동일 파이프라인**으로 통합 (`visualizer._render_floorplan_canvas`):
+  door {x,y,w,h} → rect 4-corner polygon (`_door_to_coords`) → 방 + door 통합 `fill_items` 로
+  (1) solid 채우기 (2) 겹침 영역 블렌딩 (방-방·방-door·door-door) (3) 테두리 최상단 재도색.
+  `_blend_overlap_regions` 를 fill_color 직접 받는 generic 버전으로 일반화. alpha `draw_door_rect`
+  폐기.
+- 검증: interior door (235,235,235), front_door (186,236,140) 모두 solid 로 뚜렷, 방 색은 원색 유지.
+- 전체 png 재생성 (rooms/input 85, output 395, bubble 80).
+
+### 2026-07-06c (평면도 시각화 렌더링 방식 변경 — alpha 폐기, solid + 겹침 블렌딩)
+
+**문제**: alpha 0.6 블렌딩으로 방을 그리면 방 색이 color_map 팔레트 원색과 달라진다
+(livingroom [213,94,0] → 화면 (230,158,102)). bubble diagram node (solid 원색) 와도 불일치.
+사용자 지적: "투명도 쓰지 말고 방 색 안 달라지게, 겹침은 표현하는 방법".
+
+**해결 (renderer.py + visualizer.py)**: `_render_floorplan_canvas` 를 다음으로 변경.
+1. 방 채우기: **solid (불투명)** — `fill_polygon_solid` (색 왜곡 0). alpha addWeighted 폐기.
+2. **겹침 영역만** 두 방 fill_color 평균으로 블렌딩 재도색 — `_blend_overlap_regions`
+   (shapely intersection). 단독 영역은 원색, 겹침부만 섞인 색 → draw order 무관하게 겹침 인지.
+3. 모든 방 **테두리 최상단 재도색** — `draw_polygon_border` (겹쳐 덮인 방 윤곽도 드러남).
+- renderer 신규 메서드: `fill_polygon_solid`, `fill_region_solid`, `draw_polygon_border`,
+  `points_from_xy`. 기존 `draw_room_polygon` (alpha) 은 호환 위해 유지.
+- bubble node 색: `_load_room_colors_hex` 를 solid 원색으로 (직전 alpha 블렌딩 시도 되돌림).
+  → rooms.png · output png · bubble diagram 모두 color_map 팔레트 원색으로 일치.
+
+**전체 png 재생성** (`scripts/figures/regenerate_for_paper_pngs.py`, 모델 추론 불필요 —
+input.txt / output txt 토큰 파싱 후 재렌더): rooms/input 85, output png 395, bubble 80.
+검증: livingroom (213,94,0), bedroom (0,114,178) 등 solid 원색 정확. 빈 output 5/400 은
+embed_align (학습 초기) 의 저품질 반복 생성 (좌표 캔버스 이탈) — 정상.
+
+**v1 archive 이동**: `experiments/for_paper_archive_before_fix_20260706/` (옛 팔레트) 를
+`temp/for_paper_v1_archive_before_fix_20260706/` 로 이동 (experiments 에서 for_paper 와 형제
+폴더로 나란히 있어 혼동 유발).
+
+**bubble diagram node 정의 정정**: node = **edge (connectivity) 에 등장하는 방만** (rooms 는
+type 색칠용 lookup). edge 없는 방은 표시 X (사용자 정정).
+
+### 2026-07-06b (for_paper 실험 v2 재실행 — RL adapter 무효 규명 + 개선사항 반영)
+
+**CRITICAL 발견 — RL adapter lora_B=0**: exp2 (stage 비교) 에서 RL 출력이 SFT 와 완전 동일한
+버그 조사 결과, **RL adapter 의 lora_B 가 모든 checkpoint (로컬 3개 + 서버 final/checkpoint-5000/
+10000) 에서 전부 0** 임을 확인. LoRA delta = (α/r)·B@A 이므로 B=0 → delta=0 → RL 이 forward 에
+아무 영향 없음. 대조군 SFT-110418 은 lora_B norm=2138 (정상). 즉 **RL(GDPO) 학습이 rl adapter 의
+lora_B 로 gradient 를 전혀 흘리지 않은 학습 파이프라인 문제** (저장 버그 아님 — 중간 checkpoint 도
+전부 0). RL 재학습/디버깅은 훈련 서버에서 별도 진행 예정 (사용자 결정: 나머지 개선 먼저).
+
+**transfer-file (4번 서버, port 2222)**: SFT checkpoint-110418 (5.35GB, lora_B 정상) +
+RL rl-max-step-10000-constant-lr-2e-5-temp-1.1/final (2.36GB) 다운로드. (서버 IP 163.152.176.231
+은 기본 포트 22 timeout — bash history 로 포트 2222 확인.)
+
+**개선사항 반영 (사용자 지적 6종)**:
+1. color_map.yaml outline 을 [64,64,64] 등 사용자 직접 지정 Okabe-Ito 색맹친화 팔레트로 교체
+   (old3 주석 보존). 재시각화 완료.
+2. RL adapter 무효 규명 (위). SFT 경로를 active(105399) → checkpoint-110418 로 변경.
+3. 토큰 시퀀스 텍스트를 블록 단위 (``<ROOM_SUMMARY> ... <END_ROOM_SUMMARY>`` 한 줄) 로 표시 —
+   `tokens_to_text` 에 `_BLOCK_CLOSE` 매핑 기반 묶기 추가.
+4. bubble diagram node 가장자리 잘림 해결 — bbox [-1,1] 정규화 + 중앙정렬 + margin(±1.55) +
+   equal aspect. isolated node 는 circular_layout. node_size 를 node 수에 반비례.
+5. exp2-5 증량 + SFT 추가 + output/{stage} 분리: exp2 (10 plan × EA/SFT × 5),
+   exp3 (10 plan × 5, output/sft/), exp4 (density별 10 × 4), exp5 (종류별 10 × 4). RL 은 무효라
+   보류 — 코드에 `GEN_STAGES`/`EXP2_STAGES` 상수로 두어 RL 수정 후 재추가 용이.
+6. 이전 v1 결과는 `experiments/for_paper_archive_before_fix_20260706/` 로 보존 (삭제 X).
+
+**메모리 OOM 해결**: exp5 반복 재실행 중 좀비 프로세스 누적 (각 모델 ~10GB GPU 점유) 으로 RAM 99%.
+해결 — (a) 실행 전 `pkill -9 -f for_paper` (b) `max_new_tokens` 2200→1800 (KV cache 축소)
+(c) 매 sample `torch.cuda.empty_cache()` (d) `generate_n_samples` skip 로직 (idempotent 재개).
+단일 실행 시 RAM 4.1GB / GPU 10.8GB 안정 확인.
+
+**최종 산출** (`experiments/for_paper/`): input_output_example (5 plan), generated_floorplan_per_stage
+(10 plan × EA/SFT × 5 = 100 gen), 1-to-many-generation (10 × 5 = 50), varying_input_density
+(4 × 10 × 4 = 160), imprecise_and_contradictory_inputs (2 × 10 × 4 = 80). EA≠SFT 정상 확인.
 
 ### 2026-07-06 (for_paper 논문 figure 실험 5종 + color_map 팔레트 개선)
 
@@ -500,6 +781,8 @@
 | 2026-05-25 | FID published HD vs ours_augmented 비대칭 (모집단 차이 + augmentation drop·transform 효과) | 사용자 정밀 분석 — 모델 품질 차이가 아닌 protocol 차이 | (1) ours_best1 신설 — plan 당 1 sample, 329 vs 329 균형 (2) cited_baselines.yaml protocol_note 강화 (3) ours_bubble protocol 별도 측정 예정 |
 | 2026-05-25 | GSDiff process2 의 `TypeError: list indices must be integers or slices, not tuple` | process1 산출물의 adjacency_list 구조와 process2 기대 구조 mismatch — repo 자체 코드 정합성 문제 | 디버그 미완. README 의 `move.py` 도 실제 파일 없음. cited 인용 정책 적용 — 단 GSDiff 의 cited 값도 보고 불완전해 baseline 비교에서 제외 결정 |
 | 2026-05-25 | DS2D paired GED 측정 첫 시도에서 `matched=0` 발생 | `_load_common_dir_grouped` 가 stem 끝의 `_숫자` 를 일률적으로 sample_idx 로 인식해 GT (`5R_2.json`) 의 plan_id 를 `5R` + `2` 로 잘못 분리 | `strip_sample_suffix` 인자 추가, gen=True / GT=False 로 분기 적용 |
+| 2026-07-06 | for_paper 벡터 출력 추가 후 exp4 재생성이 `Tcl_AsyncDelete: async handler deleted by the wrong thread` 로 크래시 (connectivity_counts 3/10 지점) | matplotlib 기본 Tk 백엔드 + figure 생성/close 폭증(벡터 pdf/svg 병행) 조합에서 Tk async handler cleanup 이 다른 스레드에서 삭제되며 크래시 | `for_paper_experiments.py` 상단, pyplot import **전에** `matplotlib.use("Agg")` 강제 (non-interactive). exp4 에 idempotent skip 추가 후 재실행 |
+| 2026-07-06 | exp4 재실행 커맨드가 로그도 없이 exit 1 즉시 종료 | 커맨드 첫 줄 `pkill -9 -f for_paper_experiments` 가 자기 자신의 launcher 명령줄(`...for_paper_experiments.py --exp 4`)을 패턴 매칭해 자기 셸을 kill | pkill 을 같은 명령줄에서 제거(별도 스크립트 파일에서는 launcher 명령줄이 `.sh` 라 안전). 실행 중 프로세스 없으면 pkill 생략 |
 
 ---
 

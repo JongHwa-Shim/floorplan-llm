@@ -1272,6 +1272,84 @@ data/models/{model.name}/checkpoints/rl/{run_name}/
 
 > **DoRA 속도 저하 원인:** DoRA는 forward 패스마다 적응된 전체 가중치 행렬 `(W + lora_B @ lora_A × scale)`을 구체화하고 컬럼 노름을 계산한다. LoRA에 비해 추론 비용이 크게 증가한다. PEFT가 `adapter_config.json`을 읽어 DoRA/LoRA를 투명하게 처리하므로 코드 레벨에서는 차이가 없다.
 
+### 평면도 렌더링 방식 (색상·겹침 표현)
+
+평면도 raster 이미지(입력 조건 시각화 / 생성 결과 시각화)는 `src/build_dataset/visualize_json/`의
+`FloorplanVisualizer`(합성 오케스트레이션)와 `RoomRenderer`(저수준 OpenCV 그리기)가 담당한다.
+색상은 `config/build_dataset/visualize_json/color_map.yaml`이 단일 소스다.
+
+**렌더링 원칙 (Mod Record 2026-07-06 — alpha 블렌딩 폐기):**
+
+과거에는 방을 `alpha=0.6`으로 블렌딩해 겹침을 색 섞음으로 표현했으나, 이 방식은 방 색이
+팔레트 지정색과 달라지는 문제가 있었다(예: `livingroom [213,94,0]` → 화면 `(230,158,102)`).
+현재는 **solid(불투명) 채우기 + 겹침 영역만 블렌딩 + 테두리 최상단 재도색** 방식을 쓴다.
+
+`_render_floorplan_canvas`의 처리 순서:
+1. **solid 채우기** — outline → 방 → door 순서(painter's order). `fill_polygon_solid`로 alpha
+   없이 그려 방 색이 `color_map.yaml`의 팔레트 원색과 정확히 일치한다.
+2. **겹침 영역 블렌딩 (방-방만)** — `_compute_blend_regions`가 **방(non-outline) 쌍**의 shapely
+   교집합을 계산하고 `_blend_overlap_regions`가 그 영역만 두 방 색의 평균으로 재도색한다. 단독
+   영역은 원색 그대로, 겹치는 부분만 섞인 색이 되어 겹침이 드러난다(draw order 무관). RPLAN
+   정상 평면도는 방 겹침이 거의 없어 대부분 이 단계에서 아무것도 안 그려진다.
+   **(Mod Record 2026-07-14): 현관문·interior door(`is_door=True`)는 블렌딩에서 제외**한다 —
+   door 는 방 위 draw order 로 그려진 solid 원색을 그대로 유지해야 선명하게 보이므로, door-방·
+   door-door 겹침은 재도색하지 않는다.
+3. **테두리 최상단 재도색** — `draw_polygon_border`로 모든 방·door 윤곽선을 맨 위에 다시 그려,
+   겹쳐서 덮인 요소의 윤곽도 드러나게 한다.
+4. 라벨(`show_labels=true`일 때) → SSAA 다운샘플(`supersample>1`일 때).
+
+**door 통합:** interior door와 front_door도 방과 **동일한 채우기·테두리 파이프라인**으로 처리한다.
+`_door_to_coords`가 door `{x,y,w,h}`(중심+크기)를 사각형 4-corner 폴리곤으로 변환하고, 방과
+합친 `fill_items` 리스트(각 요소에 `is_door` 플래그)로 (1)solid 채우기 (3)테두리 최상단을 동일
+적용한다. 단 (2)겹침 블렌딩은 **방끼리만** 하고 door 는 제외한다. door는 방 위 draw order로
+그려져 방 색에 가려지지 않고 solid 원색으로 선명하다. 이 로직은 raster(`_render_floorplan_canvas`)
+와 vector(`render_floorplan_to_vector`)가 `_compute_blend_regions`를 공유해 동일하게 적용된다.
+
+**color_map.yaml 구조:**
+
+| 키 | 용도 |
+|----|------|
+| `room_colors` | 방 타입별 채우기 색 (RGB). 색맹 친화(Okabe-Ito) 팔레트, 옛 값은 `# old/old2/old3:` 주석 보존 |
+| `border_colors` | 방 타입별 테두리 색 (현재 모두 차콜 `[44,44,44]`로 통일). ※ `border_colors.front_door`는 코드가 참조하지 않는 미사용 항목 |
+| `door_color` | interior door 채우기 색 (solid) |
+| `front_door_color` | front_door 채우기 색 (solid) — front_door의 실제 적용 색은 이 키 |
+| `door_border_color` | 모든 door의 테두리 색 |
+| `vis_settings.alpha` | 레거시 `draw_room_polygon`(호환용)에서만 사용. 현재 solid 파이프라인은 무시 |
+| `vis_settings.supersample` | SSAA 배율(기본 1=비활성) |
+
+**RoomRenderer 신규 메서드 (2026-07-06):**
+
+| 메서드 | 역할 |
+|--------|------|
+| `fill_polygon_solid` | 방/door 폴리곤 solid(불투명) 채우기 — 색 왜곡 없음 |
+| `fill_region_solid` | 임의 (x,y) 폴리곤 영역 채우기 — 겹침 블렌딩 색 도포용 |
+| `draw_polygon_border` | 폴리곤 테두리만 그리기 — 최상단 재도색용 |
+| `points_from_xy` | (x,y) 튜플 리스트 → OpenCV 폴리곤 변환 (겹침 영역 exterior 좌표용) |
+
+> 기존 `draw_room_polygon`/`draw_door_rect`(alpha 블렌딩)는 호환을 위해 남겨두었으나 현재
+> `_render_floorplan_canvas` 경로에서는 사용하지 않는다.
+
+> `FloorplanVisualizer(skip_interior_doors=True)` 옵션으로 interior door 채우기를 생략할 수
+> 있다(door를 생성하지 않는 baseline과의 fair 비교 시 GT 측 door 제거용).
+
+**벡터 출력 (2026-07-06 추가) — `FloorplanVisualizer.render_floorplan_to_vector`:**
+
+OpenCV raster(`_render_floorplan_canvas`)는 256×256 고정 픽셀이라 확대 시 깨진다. 논문 삽입·
+화면 확대용으로 **matplotlib 기반 벡터(SVG/PDF) 렌더러**를 병행 제공한다. raster 와 색·겹침
+블렌딩·테두리 로직을 공유하기 위해 공용 헬퍼로 분리했다:
+
+| 메서드 | 역할 |
+|--------|------|
+| `_collect_fill_items` | outline 방 + 채우기 요소(방 non-outline + door) 구성 (raster/vector 공용) |
+| `_compute_blend_regions` | 요소 쌍 겹침 영역 + 평균색 계산 (순수 함수, raster/vector 공용) |
+| `render_floorplan_to_vector(fp, out_paths)` | matplotlib patch 로 solid 채우기 → 겹침 블렌딩 → 테두리 재도색을 재현, 확장자별 벡터 저장 (y축 반전으로 이미지 좌표계·프레이밍 일치) |
+
+- `_render_floorplan_canvas`(raster)와 `_blend_overlap_regions`는 위 공용 헬퍼를 호출하도록
+  리팩터링되어 raster 동작은 그대로 보존된다.
+- **FID 등 정량 지표는 raster(png)만 사용**한다. 벡터는 사람이 보는 figure 전용(png 와 병행).
+  for_paper 파이프라인(`for_paper_experiments.py`, `regenerate_for_paper_pngs.py`)이 평면도·
+  bubble diagram 을 png+pdf+svg 3포맷으로 저장한다.
+
 ### 결과 저장 구조
 
 Hydra `run.dir`이 날짜/시간 경로로 설정되어 있어 Hydra 로그·설정 스냅샷과 추론 결과가 동일 폴더에 저장된다.

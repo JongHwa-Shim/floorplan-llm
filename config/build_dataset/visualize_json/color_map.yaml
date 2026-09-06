@@ -15,7 +15,7 @@ room_colors:
   # old: outline: [80, 80, 80]
   # old2: outline: [120, 120, 120]
   # old3: outline: [180, 180, 180]
-  outline: [64, 64, 64]             # 밝은 크림 회색 — 배경 vs 방 콘텐츠 대비 극대화
+  outline: [90, 90, 90]             # 밝은 크림 회색 — 배경 vs 방 콘텐츠 대비 극대화
   # old: livingroom: [255, 220, 150]
   # old2: livingroom: [255, 183, 77]
   # old3: livingroom: [255, 215, 0]
@@ -86,7 +86,8 @@ default_border_color: [44, 44, 44]
 
 # 문 시각화 색상
 # old: door_color: [139, 90, 43]
-door_color: [121, 85, 72]              # Brown 400 — 인테리어 도어 (목재 톤)
+# old2: door_color: [121, 85, 72]      # Brown 400 (목재 톤) — 방 색 위 alpha 블렌딩 시 너무 어두웠음
+door_color: [193, 193, 251]            # 밝은 회백색 — 방 색 위 solid 로 그려 문이 개구부처럼 뚜렷
 # old: door_border_color: [80, 40, 10]
 door_border_color: [44, 44, 44]        # 차콜 (테두리 통일)
 # old: front_door_color: [220, 80, 50]

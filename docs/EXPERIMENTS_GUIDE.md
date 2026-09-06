@@ -640,6 +640,124 @@ uv run python scripts/tables/csv_to_latex.py experiments/tables_figures/table_1.
 이후 AiC LaTeX 템플릿 (`elsarticle.cls`) 또는 docx 템플릿에 `experiments/tables_figures/` 산출물
 삽입 → 캡션 번호·표 정렬 등 서식 조정. 본 가이드는 여기서 마무리.
 
+## 9.5 정성 시각화 실험 (for_paper — 2026-07-06 추가)
+
+논문 figure 용 정성 시각화·비교 실험 5종. 통합 스크립트 `scripts/figures/for_paper_experiments.py`
+(`--exp {1..5}`) 로 실행하며 산출물은 `experiments/for_paper/{실험}/` 하위에 저장한다.
+
+> **2026-07-06 재생성 (SFT final 체크포인트 + 20 sample):** SFT 체크포인트를 `checkpoint-110418`
+> → `final` (10epoch 추가학습 완료본) 로 교체하고 입력 조건당 sample 을 20개로 증량했다. 이전
+> checkpoint-110418 결과는 각 실험의 `sft_110418/` 폴더로 아카이브 보존. 모듈 상수 `N_SAMPLES=20`.
+> RL 은 lora_B=0 무효라 여전히 생성 제외.
+>
+> **2026-07-14 png 전용 (벡터 중단):** 산출물은 **png 만** 저장한다(모듈 상수 `VECTOR_EXTS=()`).
+> 2026-07-06 에 pdf·svg 벡터를 병행 추가했으나 사용자 요청으로 중단하고 기존 pdf/svg 를 전부
+> 삭제했다. `FloorplanVisualizer.render_floorplan_to_vector()` 메서드는 유지되며, `VECTOR_EXTS` 를
+> `("pdf","svg")` 로 되돌리면 벡터 병행 저장이 재활성화된다.
+>
+> **2026-07-14 door 겹침 블렌딩 제외:** 현관문·interior door 는 겹침 색상 블렌딩에서 제외되어
+> solid 원색으로 선명하게 표시된다(`_compute_blend_regions` 가 `is_door` 요소 skip). 방-방 겹침만
+> 블렌딩. raster·vector 공통. 상세는 `docs/Docs.md` "평면도 렌더링 방식" 참조.
+
+| # | 실험 (폴더) | 구성 | 목적 |
+|---|---|---|---|
+| 1 | `input_output_example` | **50** plan (bucket 5/6/7/8 균등, `--n_plans` 로 조정) | 학습-시 증강 입력 조건 + 정답 평면도의 토큰·시각화 예시 (input/·output/ 분리 + 양쪽 bubble diagram) |
+| 2 | `generated_floorplan_per_stage` | 20 plan × stage × 20 sample | **동일 입력**에 EA / SFT(final) / **SFT(checkpoint-35133)=sft_old** 비교. 입력=outline+방 2개(bubble 풍부, `coords_keep`). 구 결과 old/·old_old/ (2026-07-14d/e) |
+| 3 | `1-to-many-generation` | 10 plan×40 + 신규 40 plan×40 + **sparse/ 10 plan×10** | 중간 밀도 입력 1개 고정 → 다양한 variants. **exp3 항상 spatial 절제**(2026-07-07). `sparse/` = room polygon 실루엣만·counts 다수·connection/spatial 적당(2026-07-14b) |
+| 4 | `varying_input_density` | 4 density × 10 plan × **20** sample | 입력 밀도별 (polygons→spatial→counts→connectivity_only) 생성 |
+| 5 | `imprecise_and_contradictory_inputs` | contradictory 10 + imprecise 20 plan × 20 sample | contradictory(total<type합 강제) / imprecise(**σ=10px** 노이즈, 2026-07-13 30→10 완화) 입력 |
+
+```bash
+# 각 실험 개별 실행 (모델 추론 포함 — exp2~5 는 GPU + SFT adapter 필요)
+uv run python scripts/figures/for_paper_experiments.py --exp 1 --n_plans 50  # 추론 없음(CPU) — GPU 작업과 병렬 가능
+uv run python scripts/figures/for_paper_experiments.py --exp 2   # EA/SFT stage 비교
+uv run python scripts/figures/for_paper_experiments.py --exp 3   # 1-to-many
+uv run python scripts/figures/for_paper_experiments.py --exp 4   # varying density
+uv run python scripts/figures/for_paper_experiments.py --exp 5   # imprecise/contradictory
+```
+> **exp1 은 모델을 안 쓰므로**(입력 조건 + GT 시각화만) exp2~5 의 GPU 실행과 **병렬**로 돌려도 안전하다
+> (별도 프로세스·다른 출력 디렉토리). `--n_plans` 로 생성 plan 수를 조정한다(기본 10).
+
+**핵심 구현 규칙:**
+- 저장 구조 (exp2~5): `{실험}/{plan_id}/input/{input.txt, bubble_diagram.png, rooms.png}` +
+  `output/{stage}/{n}.{txt,png}` (exp2 는 `{plan_id}/{stage}/{n}.{txt,png}`). 아카이브는
+  `sft_110418/` (exp2), `output/sft_110418/` (exp3~5).
+- **exp1 저장 구조 (2026-07-06 개선)**: `{plan_id}/input/{input.txt, rooms.png, bubble_diagram.png}`
+  + `{plan_id}/output/{output.txt, floorplan.png, bubble_diagram.png}`. 입력 조건(drop 반영)과
+  정답(full) 을 분리 저장하고 양쪽 모두 bubble diagram 을 제공. 입력 bubble 은 drop 반영,
+  출력 bubble 은 GT 전체 connectivity (`save_output_artifacts()`).
+- **입력 조건은 plan 당 한 번만 증강** 후 모든 stage·sample 에 동일하게 재사용 (매번 증강 시
+  입력이 달라지는 것을 방지). exp2 는 EA/SFT 가 완전히 같은 condition 을 받는 것이 핵심. 단
+  증강은 seed=None 이라 **실행 시마다 입력 조건이 새로 생성**됨 (아카이브 sft_110418 과는 다른 입력).
+- input.txt 는 블록 단위 (`<ROOM_SUMMARY> ... <END_ROOM_SUMMARY>` 한 줄) 로 표시.
+- bubble_diagram node = **edge(connectivity) 에 등장하는 방만** (rooms 는 type 색칠 lookup),
+  node 색은 `color_map.yaml` room_colors 연동. **(2026-07-14)** node 를 data 좌표 원으로 그리고
+  최근접 node 간격이 지름보다 커지도록 좌표를 스케일해 **node 수가 많아도 겹치지 않게** 개선
+  (`draw_bubble_diagram`). figure 크기는 layout bbox 에 비례해 렌더 비율 일정.
+- **RL stage 는 보류** — RL adapter lora_B=0 무효 (SUMMARY §1.2). 코드의 `EXP2_STAGES`/`GEN_STAGES`
+  상수에 `"rl"` 을 추가하면 RL 수정 후 자동 재실행된다. 현재는 EA/SFT 만.
+- sample 수는 모듈 상수 `N_SAMPLES=20` (2026-07-06 4~5 → 20 증량). exp4·exp5 는 idempotent skip
+  (output png ≥ N_SAMPLES 존재 시 건너뜀) — 중단 후 재실행 시 이어서 완료.
+- **png 전용 출력**(2026-07-14): 평면도·bubble diagram 모두 png 만 저장(`VECTOR_EXTS=()`). door 는
+  겹침 블렌딩 제외로 solid 표시.
+- **exp2~5 순차 재생성 드라이버**: `bash experiments/run_for_paper_exp2to5.sh` (각 exp 를 독립
+  프로세스로 순차 실행하여 GPU 반납, 로그 `experiments/run_for_paper_exp{2..5}.log`).
+- **exp3 증강(`_DENSITY_MID_YAML`, 2026-07-07)**: spatial 은 항상 절제(방침). counts(total 0.4/
+  type 0.5) · connectivity(edge 0.5/pair 0.2) · spatial(0.55) 을 과감하게, block/type/coords/door/
+  front_door 도 활성화해 입력 sparsity 를 다양하게 만든다. `run_exp3(n_plans, n_samples, seed,
+  exclude_pids, idempotent)` 로 파라미터화됨.
+- **exp3 sample 추가/신규 배치 스크립트**:
+  - `extend_exp3_samples.py` — 기존 exp3 각 plan 의 **저장된 input.txt 조건 그대로** 재사용해
+    21~40 등 추가 sample 을 이어붙임(증강 재실행 없이 동일 입력 보장, 새 seed 로 신규 sample).
+  - `add_exp3_batch.py` — for_paper **전 실험 plan_id 를 모두 제외**하고 새 plan N개(현재 40)를
+    새 증강 조건으로 뽑아 각 M개(현재 40) 생성. idempotent(완료 plan skip).
+  - `add_exp3_sparse.py` — **room polygon 실루엣만**(drop_coords=1.0 + outline 좌표 복원) + counts
+    다수·connection/spatial 적당 절제한 sparse 입력으로 10 plan×10. `1-to-many-generation/sparse/`
+    에 별도 저장. 핵심: `drop_state.drop_coords.discard(0)` 로 outline(실루엣) 좌표만 복원 후 재토큰화.
+- **exp5 imprecise 노이즈(2026-07-13)**: anchor 방 좌표 Gaussian 노이즈 σ 를 30→**10px** 로 완화
+  (`_apply_strong_noise_to_anchors` 기본값·`run_exp5` 호출 모두). σ=30 은 방이 과도하게 일그러졌다.
+  `redo_imprecise.py` — 기존 imprecise 결과를 `imprecise_input/old/` 로 옮긴 뒤 신규 20 plan 을
+  σ=10 으로 재생성(조건당 20 output). 향후 `--exp 5` 도 σ=10 사용.
+- **exp2 입력 증강 재조정(2026-07-13→14d)**: bubble 을 풍부하게(`p_drop_edge`·`p_drop_block`
+  0.5→0.15) + room polygon 은 sparse 하지 않게. 초기(2026-07-13 `redo_exp2.py`)엔 drop_coords=0.65
+  로 폴리곤을 줄였으나 일부 plan 이 outline 도 사라져 "거의 문만 남는" 문제가 생겨, **2026-07-14d
+  `redo_exp2_v2.py`** 로 교체: `run_exp2(coords_keep=2)` 가 outline(실루엣)을 항상 표시하고 방
+  폴리곤을 정확히 2개만 남긴다(`_limit_room_polygons` 후처리, 0-polygon 방지). `run_exp2` 는
+  `n_plans/n_samples/seed/exclude_pids/aug_yaml/idempotent/coords_keep` 파라미터화 + bucket 소진 시
+  top-up. 구 결과 아카이브: `old/`(최초 sft.yaml exp2) · `old_old/`(2026-07-13 sparse redo).
+- **exp2 SFT 체크포인트 비교(2026-07-14e)**: `build_inference_cfg`/`load_stage_model` 에 `sft_path`
+  override 추가. `redo_exp2_sft_old.py` 가 exp2 각 plan 의 저장된 input.txt 조건을 그대로 재사용해
+  다른 SFT 체크포인트(`checkpoints/sft/checkpoint-35133`, DoRA)로 20 sample 생성 →
+  `{plan_id}/sft_old/`. 같은 입력에 EA / SFT(final)=sft/ / SFT(35133)=sft_old/ 비교.
+
+**⚠️ matplotlib 백엔드 (Tcl 크래시 방지):** 벡터(pdf/svg) 병행으로 figure 생성/close 가 폭증하면
+기본 Tk 백엔드가 `Tcl_AsyncDelete: async handler deleted by the wrong thread` 로 프로세스를
+크래시시킨다(2026-07-06 exp4 재생성 중단 사례). `for_paper_experiments.py` 상단에서 pyplot import
+전에 `matplotlib.use("Agg")` 를 강제해 해결. 신규 렌더 스크립트도 이 모듈을 import 하면 Agg 상속.
+
+**메모리 OOM 주의:** 반복 재실행 시 좀비 프로세스 누적으로 각 모델 (~10GB GPU) 이 겹쳐 RAM 99%
+도달. 실행 전 `pkill -9 -f for_paper_experiments` 로 정리. `generate_n_samples` 는 `max_new_tokens`
+1800 + 매 sample `torch.cuda.empty_cache()` 로 방어. ※ **주의**: `pkill -f for_paper_experiments`
+를 exp 를 띄우는 **같은 명령줄**에서 쓰면 자기 launcher 셸까지 죽여 즉시 종료된다(별도 스텝/스크립트
+파일에서 실행할 것).
+
+### 시각화 재생성 (color_map / 렌더링 방식 변경 시)
+
+색 팔레트·렌더링 방식(예: door 블렌딩 제외)을 바꾼 뒤에는 **모델 추론 없이** input.txt / {n}.txt /
+output.txt 토큰을 파싱해 모든 png 를 다시 그린다:
+
+```bash
+uv run python scripts/figures/regenerate_for_paper_pngs.py
+# input/rooms + 생성 sample({n}) + exp1 output/floorplan 재렌더. png 전용(VECTOR_EXTS=()).
+# 이미지 1건 실패해도 try/except 로 건너뛰고 계속(로그 "실패: N"). 렌더러는 홀수 좌표(garbage)
+# 안전 처리. exp1 output/bubble_diagram 은 output.txt 에 edge 없어 복원 불가라 유지(door 없어 무관).
+```
+> (참고) `add_missing_vectors.py` 는 pdf/svg 소급용이었으나 벡터 중단(2026-07-14)으로 미사용.
+
+> 렌더링 방식 (solid + 겹침 블렌딩 + 테두리 최상단, door 통합) 상세는 `docs/Docs.md` 의
+> "평면도 렌더링 방식" 섹션 참조. rooms.png 재생성 시 input.txt 의 `<EDGE>` door 좌표까지
+> 파싱해야 interior door 가 누락되지 않는다.
+
 ## 10. 사용자 액션 체크리스트
 
 - [x] **Baseline pretrained weight 다운로드** (3 종, Google Drive) — 2026-05-22 완료

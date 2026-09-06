@@ -4,7 +4,7 @@
 결과를 정리한다. 진행 이력은 `docs/EXPERIMENT_PROGRESS.md`, 실행 명령·산출물 경로 매핑은
 `docs/EXPERIMENTS_GUIDE.md` 를 참조한다.
 
-마지막 갱신: 2026-06-05 (§2.6 Input Semantic Element Comparison 섹션 신규 — DS2D 와 ours 의 입력 정보 카테고리 직교 분석, fair 비교 한계 명시)
+마지막 갱신: 2026-07-06 (⚠️ RL adapter lora_B=0 무효 이슈 발견 — §1.2 경고 추가, §2 ours 결과는 실질 EA+SFT)
 
 ---
 
@@ -31,6 +31,19 @@
 | **RL** (GDPO) | `final_checkpoints/rl/active/` (symlink) | 11 reward + GDPO + Option F 토큰 신용할당, max_steps=10000, lr=2e-5 |
 
 추론 시 `model.base_model.set_adapter(["sft", "rl"])` 명시 호출 — 이전 누락으로 RL 무효화되던 버그 수정 완료.
+
+> ⚠️ **RL adapter 무효 이슈 (2026-07-06 발견 — 재측정 필요):** RL adapter 의 **lora_B 가 모든
+> checkpoint (로컬 3종 + 서버 rl-max-step-.../{checkpoint-5000, 10000, final}) 에서 전부 0**
+> 임을 확인. LoRA delta = $(\alpha/r) \cdot B A$ 이므로 $B=0$ → delta=0 → RL adapter 가 forward 에
+> 아무 영향을 주지 않는다 (`set_adapter` 가 정상 호출돼도 RL 기여 0). 대조군 SFT adapter 는
+> lora_B norm=2138 로 정상. 즉 **RL(GDPO) 학습이 rl adapter 의 lora_B 로 gradient 를 전혀 흘리지
+> 않은 학습 파이프라인 문제** (저장 버그 아님 — 중간 checkpoint 도 전부 0). 검증: 동일 모델에서
+> `set_adapter(["sft"])` vs `set_adapter(["sft","rl"])` greedy 출력이 **완전 동일**.
+>
+> **함의:** 본 문서 §2 의 ours_* 결과들 (ours_augmented / ours_fullcond / ours_coords50 / ours_bubble
+> 등) 은 EA+SFT+RL 로 표기돼 있으나, RL 이 무효이므로 **실질적으로 EA+SFT 결과**이며 RL 기여는
+> 없다. RL 학습 파이프라인 (`src/training/rl/`) 수정 → 재학습 → RL 유효 checkpoint 확보 후 §2
+> 재측정이 필요하다. RL 수정 전까지 stage 비교 실험 (EXPERIMENTS_GUIDE §12) 은 EA/SFT 만 수행.
 
 ### 1.3 데이터셋
 

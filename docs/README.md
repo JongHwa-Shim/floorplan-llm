@@ -918,6 +918,25 @@ model:
 | `generation.num_outputs` | `2` | 동일 조건에 대한 출력 수 |
 | `model.training_stage` | `"sft"` | 출력 경로 레이블 (`outputs/inference/{model.name}/{training_stage}/{날짜}/{시간}/`) |
 
+### `config/build_dataset/visualize_json/color_map.yaml`
+
+평면도 raster 시각화(입력 조건·생성 결과 이미지)의 색상·렌더링 설정. `FloorplanVisualizer`/
+`RoomRenderer`가 단일 소스로 참조한다.
+
+| 파라미터 | 설명 |
+|---------|------|
+| `room_colors` | 방 타입별 채우기 색 (RGB). 색맹 친화(Okabe-Ito) 팔레트, 옛 값은 `# old/old2/old3:` 주석 보존 |
+| `border_colors` | 방 타입별 테두리 색 (현재 모두 차콜 `[44,44,44]`로 통일) |
+| `door_color` / `front_door_color` | interior door / front_door 채우기 색 (solid) |
+| `door_border_color` | 모든 door 테두리 색 |
+| `vis_settings.show_labels` | 라벨 그리기 토글 (추론·논문 figure는 false 권장) |
+| `vis_settings.alpha` | 레거시 alpha 블렌딩 렌더러 전용 — 현재 기본 solid 파이프라인은 무시 |
+| `vis_settings.supersample` | SSAA 배율 (기본 1=비활성) |
+
+> **렌더링 방식**: 방·문을 solid(불투명)로 채워 팔레트 원색을 정확히 표시하고, 겹침 영역만
+> 두 색 평균으로 블렌딩 + 모든 테두리를 최상단에 재도색한다. 상세는 `docs/Docs.md`의
+> "평면도 렌더링 방식" 섹션 참조.
+
 ---
 
 ## 데이터 저장 형식
