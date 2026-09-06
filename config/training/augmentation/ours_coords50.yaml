@@ -1,0 +1,48 @@
+# ours_coords50: 방 절반의 좌표만 입력 + 나머지 정보 전체 — "partial spec" protocol.
+#
+# 입력 조건 (fullcond 와 bubble 의 중간):
+#   ✓ 방 종류 (type) — 전부
+#   ✓ 방 인접관계 (edges, door 좌표 포함) — 전부
+#   ✓ 방 카운트 (room_summary) — 전부
+#   ✓ spatial 8 방위 관계 — 전부
+#   ✓ front_door 정보 — 전부 (좌표 포함)
+#   ~ 방 좌표 — 평균 50% 의 방만 (Bernoulli p_drop_coords=0.5)
+#   ✗ transform 증강 (좌표계 변형 없음)
+#   ✗ noise (좌표 잡음 없음)
+
+shuffle:
+  rid: true
+  vertex_order: false
+  room_order: true
+  edge_order: true
+  spatial_order: true
+  reverse_spatial: false
+
+transform:
+  translate: false
+  flip: false
+  scale_aspect: false
+  scale_aspect_min: 1.0
+  scale_aspect_max: 1.0
+  zoom: false
+  zoom_min: 1.0
+  zoom_max: 1.0
+
+noise:
+  p_noise: 0.0
+  noise_sigma: 0.0
+
+drop:
+  p_drop_block: 0.0
+  p_drop_type: 0.0
+  p_drop_coords: 0.5          # ← 방 절반 좌표 입력 (핵심)
+  p_drop_edge: 0.0
+  p_drop_pair: 0.0
+  p_drop_door: 0.0            # door 좌표 유지
+  p_drop_spatial: 0.0
+  p_drop_front_door: 0.0      # front_door 전부 유지
+  p_drop_front_door_coords: 0.0
+
+room_summary:
+  p_drop_total: 0.0
+  p_drop_type: 0.0

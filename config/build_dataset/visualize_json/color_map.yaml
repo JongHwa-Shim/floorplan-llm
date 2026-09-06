@@ -1,43 +1,119 @@
-# 방 타입별 색상 매핑 설정 (RGB)
-# 형식: [R, G, B] (0-255)
-room_colors:
-  outline: [80, 80, 80]              # 회색 - 윤곽선 (외벽 역할)
-  livingroom: [255, 220, 150]        # 따뜻한 노랑 - 거실
-  bedroom: [180, 210, 255]           # 하늘색 - 침실
-  kitchen: [200, 240, 200]           # 연두색 - 주방
-  bathroom: [180, 230, 240]          # 청록색 - 욕실
-  balcony: [230, 255, 220]           # 연한 초록 - 발코니
-  entrance: [255, 200, 180]          # 연한 주황 - 현관
-  storage: [220, 200, 255]           # 연한 보라 - 창고
-  studyroom: [255, 240, 180]         # 연한 노랑 - 서재
-  front_door: [255, 160, 100]        # 주황 - 현관문
+# 방 타입별 색상 매핑 설정 (RGB).
+#
+# Mod Record (2026-05-15):
+#   - 기존 색상은 빛바랜 파스텔 톤이라 시각적 구별이 떨어졌다. Material Design 컬러팔레트의
+#     중간 톤(채도 ↑, 명도는 alpha 0.6 블렌딩과 어울리도록 살짝 ↓)으로 교체.
+#   - 테두리는 방 타입별 명도 차감 방식 대신 모든 방 공통의 진한 차콜(graphite #2C2C2C)로 통일.
+#     건축 도면 톤에 가까워 텍스트 라벨과의 대비도 더 좋아진다.
+#   - 라벨 색은 진한 잉크 톤으로 명시 (vis_settings.label_color).
+#   - 기존 값은 모두 ``# old:`` prefix 로 주석화하여 손쉽게 복원 가능.
+#   - 새 옵션:
+#       vis_settings.show_labels: 라벨 그리기 토글 (기본 true; 추론 시 false 권장).
+#       vis_settings.label_color / label_thickness: 텍스트 색·두께 명시.
 
-# 방 타입별 테두리 색상 (RGB)
+room_colors:
+  # old: outline: [80, 80, 80]
+  # old2: outline: [120, 120, 120]
+  # old3: outline: [180, 180, 180]
+  outline: [64, 64, 64]             # 밝은 크림 회색 — 배경 vs 방 콘텐츠 대비 극대화
+  # old: livingroom: [255, 220, 150]
+  # old2: livingroom: [255, 183, 77]
+  # old3: livingroom: [255, 215, 0]
+  livingroom: [213, 94, 0]           # 따뜻한 앰버 — 가장 큰 공간, 시선 anchor (색맹 친화 warm hue)
+  # old: bedroom: [180, 210, 255]
+  # old2: bedroom: [129, 199, 232]
+  # old3: bedroom: [33, 150, 243]
+  bedroom: [0, 114, 178]             # Cool Slate Blue — 침실 (color universal design: safe from CVD)
+  # old: kitchen: [200, 240, 200]
+  # old2: kitchen: [129, 199, 132]
+  # old3: kitchen: [46, 204, 113]
+  kitchen: [0, 158, 115]             # ColorBrewer Set2 청록초록 — livingroom vs bedroom 사이 명확 구분
+  # old: bathroom: [180, 230, 240]
+  # old2: bathroom: [128, 222, 234]
+  # old3: bathroom: [0, 188, 212]
+  bathroom: [230, 159, 0]             # ColorBrewer Set3 aqua — kitchen 초록보다 밝고 청량한 톤
+  # old: balcony: [230, 255, 220]
+  # old2: balcony: [197, 225, 165]
+  # old3: balcony: [205, 220, 57]
+  balcony: [204, 121, 167]             # Muted Sage — 실내 vs 외부 톤 분리, kitchen 과 채도/명도 차별
+  # old: entrance: [255, 200, 180]
+  # old2: entrance: [255, 138, 101]
+  # old3: entrance: [255, 87, 34]
+  entrance: [86, 180, 233]             # ColorBrewer Set2 산호 — livingroom 앰버와 다른 saturation 축
+  # old: storage: [220, 200, 255]
+  # old2: storage: [179, 157, 219]
+  # old3: storage: [156, 39, 176]
+  storage: [240, 228, 66]             # 소프트 보라 — 저채도, 유틸리티 공간 톤
+  # old: studyroom: [255, 240, 180]
+  # old2: studyroom: [255, 213, 79]
+  # old3: studyroom: [255, 152, 0]
+  studyroom: [51, 34, 136]           # ColorBrewer Set2 핑크 — 지식/문화 톤, storage 보라와 hue 분리
+  # old: front_door: [255, 160, 100]
+  # old2: front_door: [239, 83, 80]
+  # old3: front_door: [244, 67, 54]
+  front_door: [186, 236, 140]            # 딥 크림슨 — 진출입점 강조, entrance 산호보다 진한 red
+
+# 방 타입별 테두리 색상 (RGB).
+# Mod Record: 모든 방 공통 진한 차콜로 통일 (건축 도면 톤). 개별 색상 분기는 제거했다.
+# 가독성 ↑, 시각적 일관성 ↑. 옛 색상은 주석으로 남김.
 border_colors:
-  outline: [40, 40, 40]              # 윤곽선 테두리
-  livingroom: [200, 150, 50]
-  bedroom: [80, 130, 200]
-  kitchen: [80, 160, 80]
-  bathroom: [60, 150, 180]
-  balcony: [100, 180, 80]
-  entrance: [200, 120, 80]
-  storage: [130, 100, 200]
-  studyroom: [200, 160, 50]
-  front_door: [200, 100, 40]
+  # old: outline: [40, 40, 40]
+  outline: [30, 30, 30]                # 더 어두워 윤곽선이 잘 보이게
+  # old: livingroom: [200, 150, 50]
+  livingroom: [44, 44, 44]
+  # old: bedroom: [80, 130, 200]
+  bedroom: [44, 44, 44]
+  # old: kitchen: [80, 160, 80]
+  kitchen: [44, 44, 44]
+  # old: bathroom: [60, 150, 180]
+  bathroom: [44, 44, 44]
+  # old: balcony: [100, 180, 80]
+  balcony: [44, 44, 44]
+  # old: entrance: [200, 120, 80]
+  entrance: [44, 44, 44]
+  # old: storage: [130, 100, 200]
+  storage: [44, 44, 44]
+  # old: studyroom: [200, 160, 50]
+  studyroom: [44, 44, 44]
+  # old: front_door: [200, 100, 40]
+  front_door: [44, 44, 44]
 
 # 알 수 없는 타입의 기본 색상
+# old: default_fill_color: [200, 200, 200]
 default_fill_color: [200, 200, 200]
-default_border_color: [100, 100, 100]
+# old: default_border_color: [100, 100, 100]
+default_border_color: [44, 44, 44]
 
 # 문 시각화 색상
-door_color: [139, 90, 43]           # 갈색 - 문
-door_border_color: [80, 40, 10]     # 짙은 갈색 - 문 테두리
-front_door_color: [220, 80, 50]     # 빨간색 - 현관문
+# old: door_color: [139, 90, 43]
+door_color: [121, 85, 72]              # Brown 400 — 인테리어 도어 (목재 톤)
+# old: door_border_color: [80, 40, 10]
+door_border_color: [44, 44, 44]        # 차콜 (테두리 통일)
+# old: front_door_color: [220, 80, 50]
+front_door_color: [186, 236, 140]        # Red 600 — 현관문 강조
 
 # 시각화 설정
 vis_settings:
-  image_size: 256                   # 고정 출력 해상도 (256x256)
-  border_thickness: 1               # 테두리 두께 (최소값)
-  font_scale: 0.35                  # 텍스트 폰트 크기
-  alpha: 0.6                        # 채우기 투명도 (0.0-1.0)
-  background_color: [255, 255, 255] # 배경색 (흰색)
+  image_size: 256                      # 고정 출력 해상도 (256x256)
+  # old: border_thickness: 1
+  border_thickness: 1                  # 테두리 두께
+  # old: font_scale: 0.35
+  font_scale: 0.35                     # 텍스트 폰트 크기
+  # old: alpha: 0.6
+  alpha: 0.6                           # 채우기 투명도 (0.0-1.0)
+  background_color: [255, 255, 255]    # 배경색 (흰색)
+
+  # ---- 신규: 라벨 / 라벨 토글 옵션 (Mod Record 2026-05-15) ----
+  # 라벨 그리기 토글. 추론(논문 figure 산출)에서는 false 권장.
+  # FloorplanVisualizer(show_labels=...) 인자가 우선; None 이면 이 키가 사용된다.
+  show_labels: true
+  label_color: [20, 20, 20]            # 잉크 톤 진회색 (검정에 가까움)
+  label_thickness: 1                   # 텍스트 stroke 두께
+
+  # ---- SSAA (Super-Sampling Anti-Aliasing, Mod Record 2026-05-15c) ----
+  # 내부적으로 image_size × supersample 캔버스에서 렌더링한 뒤 INTER_AREA 로 다운샘플.
+  # 1 = SSAA 비활성 (기본·권장). 직교 도형은 LINE_8 만으로 픽셀 단위 단색이 보장되므로
+  #     SSAA 가 도리어 가장자리에 다운샘플 평균 픽셀을 남겨 sharp 함을 해친다.
+  # >1: 텍스트 가독성을 추가로 부드럽게 만들고 싶을 때 선택. 도형 가장자리는 약간 흐려진다.
+  # 메모리·시간 비용은 supersample^2 배.
+  supersample: 1

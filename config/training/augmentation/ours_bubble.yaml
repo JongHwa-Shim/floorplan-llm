@@ -1,0 +1,50 @@
+# ours_bubble: HouseDiffusion cited 와 동일 sparsity protocol — 좌표 없이 bubble diagram only 입력.
+# 진짜 fair baseline 비교용 (방 좌표를 모델이 generate, condition 으로 받지 않음).
+#
+# 입력 조건 (HD bubble diagram 과 동일):
+#   ✓ 방 종류 (type)
+#   ✓ 방 인접관계 (edges, 단 door 좌표 drop)
+#   ✓ 방 카운트 (room_summary)
+#   ✓ spatial 8 방위 관계 (HD 는 안 받지만 ours 학습 protocol 상 포함)
+#   ✗ 방 좌표 (drop_coords: 1.0)
+#   ✗ door 좌표 (drop_door: 1.0)
+#   ✗ front_door 정보 (drop_front_door: 1.0)
+#   ✗ transform 증강 (좌표계 변형 없음)
+#   ✗ noise (좌표 잡음 없음)
+
+shuffle:
+  rid: true              # bubble diagram 은 RID 의미 없음 — shuffle OK
+  vertex_order: false    # 좌표 없으니 무관
+  room_order: true       # bubble diagram ordering 의미 없음
+  edge_order: true
+  spatial_order: true
+  reverse_spatial: false
+
+transform:
+  translate: false
+  flip: false
+  scale_aspect: false
+  scale_aspect_min: 1.0
+  scale_aspect_max: 1.0
+  zoom: false
+  zoom_min: 1.0
+  zoom_max: 1.0
+
+noise:
+  p_noise: 0.0
+  noise_sigma: 0.0
+
+drop:
+  p_drop_block: 0.0           # 방 자체는 유지 (방 종류만 받음)
+  p_drop_type: 0.0            # 종류 정보 유지
+  p_drop_coords: 1.0          # 좌표 전부 drop ← 핵심
+  p_drop_edge: 0.0            # 인접관계 유지
+  p_drop_pair: 0.0
+  p_drop_door: 1.0            # door 좌표 drop (HD bubble 에는 door 좌표 없음)
+  p_drop_spatial: 0.0         # spatial 유지 (ours 학습 protocol)
+  p_drop_front_door: 1.0      # front_door 전체 drop
+  p_drop_front_door_coords: 1.0
+
+room_summary:
+  p_drop_total: 0.0           # 방 카운트 유지
+  p_drop_type: 0.0

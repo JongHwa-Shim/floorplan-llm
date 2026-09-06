@@ -1,0 +1,48 @@
+# ours_count_only: 가장 sparse 한 입력 — 방 개수 정보만.
+#
+# 입력에 들어가는 정보:
+#   ✓ 총 방 수 (room_summary.total)
+#   ✓ 방 종류별 카운트 (room_summary.type counts)
+#   ✗ 방 좌표, 종류 (방 block 전체 drop)
+#   ✗ 방 인접 관계 (edges 전부 drop)
+#   ✗ 8방위 spatial (전부 drop)
+#   ✗ door / front_door (전부 drop)
+#   ✗ outline 좌표 (방 block 전부 drop → outline 도)
+#   ✗ transform / noise
+
+shuffle:
+  rid: true
+  vertex_order: false
+  room_order: true
+  edge_order: true
+  spatial_order: true
+  reverse_spatial: false
+
+transform:
+  translate: false
+  flip: false
+  scale_aspect: false
+  scale_aspect_min: 1.0
+  scale_aspect_max: 1.0
+  zoom: false
+  zoom_min: 1.0
+  zoom_max: 1.0
+
+noise:
+  p_noise: 0.0
+  noise_sigma: 0.0
+
+drop:
+  p_drop_block: 1.0            # 모든 방 block 제거 (outline 포함)
+  p_drop_type: 0.0             # 무관 (block 자체가 빠짐)
+  p_drop_coords: 1.0           # 좌표 제거
+  p_drop_edge: 1.0             # edge 전체 제거
+  p_drop_pair: 1.0
+  p_drop_door: 1.0
+  p_drop_spatial: 1.0          # spatial 8방위 제거
+  p_drop_front_door: 1.0       # front_door 전부 제거
+  p_drop_front_door_coords: 1.0
+
+room_summary:
+  p_drop_total: 0.0            # 총 방 수 항상 유지 (핵심)
+  p_drop_type: 0.0             # 방 종류별 카운트 항상 유지 (핵심)

@@ -152,6 +152,25 @@ def load_samples(
     plan_ids = cfg.input.get("plan_ids")
     max_samples = cfg.input.get("max_samples")
 
+    # Mod Record: plan_ids_file 지원 — 329 plan_id 같은 큰 리스트를 CLI override로
+    # 넘기는 대신 JSON 파일 경로로 전달. JSON 형식: ["fp_x", ...] 또는 {"all": [...]}.
+    # plan_ids 와 file 이 동시에 주어지면 합집합 사용.
+    plan_ids_file = cfg.input.get("plan_ids_file")
+    if plan_ids_file:
+        import json
+        loaded = json.loads(Path(plan_ids_file).read_text())
+        if isinstance(loaded, dict):
+            loaded = loaded.get("all") or [
+                pid for k, v in loaded.items()
+                if not k.startswith("_") and isinstance(v, list) for pid in v
+            ]
+        existing = list(plan_ids) if plan_ids else []
+        plan_ids = sorted(set(existing) | set(loaded))
+        logger.info(
+            "plan_ids_file 로드: %s (%d개 → 최종 %d개)",
+            plan_ids_file, len(loaded), len(plan_ids),
+        )
+
     if mode == "jsonl_file":
         jsonl_file = cfg.input.jsonl_file
         if jsonl_file is None:

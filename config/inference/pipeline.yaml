@@ -64,7 +64,8 @@ input:
   arrow_split: "test"
   txt_dir: "data/inference/input_txt"
   txt_pattern: "*.txt"
-  plan_ids: null # JSONL 모드에서 처리할 plan_id 리스트 (null이면 전체 처리)
+  plan_ids: null # 처리할 plan_id 리스트 (null이면 전체 처리, plan_ids_file 과 합집합)
+  plan_ids_file: null # plan_id 리스트가 담긴 JSON 파일 경로 (list 또는 {"all": [...]})
   max_samples: 20
 
 # 증강 설정 (훈련 시와 동일한 AugmentationPipeline 사용)
@@ -78,6 +79,10 @@ output:
   save_tokens: true
   save_json: true
   save_image: true
+  # Mod Record (2026-05-15): 추론 결과 floorplan.png 에 방 이름 텍스트 라벨을 그릴지 여부.
+  # 본 연구·baseline 비교 figure 산출에는 라벨이 불필요하므로 기본 false.
+  # 데이터 검증·디버깅 용으로 라벨이 필요하면 override 로 true 지정.
+  draw_labels: false
 
 # 생성 파라미터
 generation:

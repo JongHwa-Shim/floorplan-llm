@@ -40,6 +40,7 @@ def gdpo_group_normalize(
     rewards_per_func: torch.Tensor,
     num_generations: int,
     eps: float = 1e-8,
+    use_gdpo_normalization: bool = True,
 ) -> torch.Tensor:
     """보상별 그룹 내 z-score 정규화 (GDPO).
 
@@ -48,11 +49,15 @@ def gdpo_group_normalize(
 
     ALL-PROCESS 데이터로 호출해야 올바른 그룹 통계를 계산할 수 있다.
 
+    Mod Record: ``use_gdpo_normalization=False`` 시 표준 GRPO (그룹 평균만 빼고 분산 정규화 미적용)
+    동작으로 fallback — 가이드 Exp 10 (GDPO vs Standard GRPO) 의 baseline 변형 지원.
+
     Args:
         rewards_per_func: shape $(B_{total}, K)$
             $B_{total}$ = 전체 프로세스 completion 수 (gather 후).
         num_generations: 그룹 크기 G (프롬프트당 생성 개수).
         eps: 수치 안정성 엡실론.
+        use_gdpo_normalization: True 면 보상별 z-score(GDPO). False 면 단순 그룹 평균 차감(GRPO).
 
     Returns:
         정규화된 보상별 어드밴티지. shape $(B_{total}, K)$
@@ -81,6 +86,11 @@ def gdpo_group_normalize(
         std_k = torch.sqrt((diff_clean ** 2).mean(dim=1, keepdim=True))  # (N, 1, K)
     else:
         std_k = torch.zeros_like(mean_k)
+
+    if not use_gdpo_normalization:
+        # Standard GRPO: 분산 정규화 미적용, 그룹 평균만 빼기 (가이드 Exp 10 baseline)
+        A_k = grouped - mean_k                                          # (N, G, K)
+        return A_k.view(B_total, K)
 
     A_k = (grouped - mean_k) / (std_k + eps)  # (N, G, K)
     # NaN 방어 (전체 그룹이 동일값이면 std=0, mean=값 → (값-값)/eps ≈ 0)
