@@ -923,9 +923,9 @@ $$A_k^{(i)} = \frac{r_k^{(i)} - \mathbb{E}[r_k]}{\sqrt{\text{Var}(r_k)} + \epsil
 
 $$A^{(i)} = \sum_{k=1}^{K} w_k \cdot A_k^{(i)}$$
 
-**3. 하드 게이트 (R_format=0이면 전체 보상 0)**
+**3. 훈련용 하드 게이트 (R_format=0이면 전체 보상 0)**
 
-포맷 파싱 실패 시 geometry/connectivity 보상이 의미 없으므로 강제 0.
+훈련에서는 형식 보상이 0이면 나머지 보상도 0으로 만든다. 보상 충족률 평가에서는 형식 오류와 기하·조건 충족 여부를 독립적으로 측정하므로 이 게이트를 적용하지 않는다.
 
 **4. 토큰 수준 신용할당 (옵션 F: Sign-Asymmetric Credit Assignment with Penalty Offset)**
 
@@ -980,7 +980,9 @@ $$a_t = A \cdot \bigl[1 + \mathrm{sign}(A) \cdot \bigl(\alpha (1 - m_t) - \beta 
 | spatial | 모든 지정 방향 관계 충족 | 없음 | 0.5 |
 | polygon_fidelity | Hungarian 방 매칭 후 모든 입력 꼭짓점이 출력 꼭짓점에서 15px 이내 | 입력 꼭짓점에 대응하지 않는 출력 꼭짓점 X/Y | 1.5 |
 
-모든 보상은 0 또는 1을 반환한다. 입력 조건이 생략되면 그 조건을 검사하지 않는다. format이 활성화되고 hard_gate=true일 때 형식 실패는 모든 점수를 0으로 만든다. format 제거 실험에서는 gate도 제거한다.
+모든 보상은 0 또는 1을 반환한다. 입력 조건이 생략되면 그 조건을 검사하지 않는다. 훈련에서는 format이 활성화되고 hard_gate=true일 때 형식 실패가 모든 점수를 0으로 만든다. format 제거 실험에서는 gate도 제거한다.
+
+**보상 충족률 평가:** `scripts/metrics/compute_novel_metrics.py`는 `compute_all_rewards(..., apply_format_gate=False)`로 각 보상을 독립적으로 계산한다. 개별 보상 함수는 전체 `parsed.success`로 다른 항목까지 실패시키지 않고, 복원된 방·문·좌표와 해당 보상의 조건을 검사한다. 예를 들어 `<END_OUTPUT>`만 빠진 직교 평면도는 Format=0, Orthogonality=1이 될 수 있다. 방을 전혀 복원할 수 없는 출력은 각 보상이 0이며, 파싱 실패 출력도 기존과 같이 평가 평균의 분모에 포함한다. 훈련 설정 객체는 평가 중 변경하지 않는다.
 
 **기하 검사:** room_in_outline은 Shapely covers로 폴리곤 전체를 검사하므로 꼭짓점만 내부에 있고 변이 오목부를 가로지르는 경우도 실패한다. 꼭짓점이 모두 내부라 위반 토큰을 특정할 수 없으면 0 마스크를 유지한다. Non-overlap 역시 십자 겹침처럼 침범 꼭짓점이 없더라도 면적 겹침은 실패로 처리한다. 자기교차·영면적 폴리곤을 자동 수리하여 만점 처리하지 않는다. 현관문 포함 검사에서는 현재 (x,y)와 (x+w,y+h)를 대표 꼭짓점으로 사용한다. 다만 데이터 추출·토큰화의 x/y는 문 중심이므로 이 좌표 해석의 혼용은 후속 확인 사항이다. 이전 문서의 ‘토큰화와 동일한 좌상단 좌표’라는 설명은 정정한다.
 

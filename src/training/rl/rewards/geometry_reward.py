@@ -25,7 +25,8 @@ def compute_orthogonality_reward(parsed: "ParsedFloorplan") -> tuple[float, list
     Raises:
         없음.
     """
-    if not parsed.success or not parsed.rooms:
+    # Mod Record: 형식 오류는 직교성과 독립적이며, 훈련 게이트는 호출부에서 적용한다.
+    if not parsed.rooms:
         return 0.0, []
     satisfied = True
     errors = []
@@ -62,7 +63,8 @@ def compute_no_overlap_reward(parsed: "ParsedFloorplan") -> tuple[float, list[in
     Raises:
         없음. 유효하지 않은 폴리곤은 실패로 처리한다.
     """
-    if not parsed.success:
+    # Mod Record: 복원된 방의 겹침을 형식 보상과 독립적으로 검사한다.
+    if not parsed.rooms:
         return 0.0, []
     rooms = [room for room in parsed.rooms if room.room_type != "outline"]
     polygons = []

@@ -40,8 +40,12 @@ def compute_count_total_reward(
 
     Returns:
         1.0 (일치 또는 채점 비활성) 또는 0.0 (불일치).
+
+    Raises:
+        없음.
     """
-    if not parsed.success or not parsed.rooms:
+    # Mod Record: 형식 오류와 방 개수는 독립적으로 평가한다.
+    if not parsed.rooms:
         return 0.0
 
     expected_total = metadata.get("total_rooms")
@@ -71,8 +75,12 @@ def compute_count_type_reward(
 
     Returns:
         모든 노출 타입의 개수가 맞으면 1.0, 하나라도 다르면 0.0. 조건이 없으면 1.0.
+
+    Raises:
+        없음.
     """
-    if not parsed.success or not parsed.rooms:
+    # Mod Record: 형식 오류와 종류별 방 개수는 독립적으로 평가한다.
+    if not parsed.rooms:
         return 0.0
 
     expected_counts: dict[str, int] = metadata.get("type_counts", {})

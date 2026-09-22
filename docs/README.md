@@ -851,7 +851,7 @@ model:
 | `rl.kl_coeff` | `0.05` | KL 페널티 계수 (β) |
 | `rl.clip_range` | `0.2` | PPO 클리핑 엡실론 |
 | `advantage.use_token_credit_assignment` | `true` | 토큰 수준 신용할당 전역 토글 |
-| `rewards.format.hard_gate` | `true` | R_format=0이면 모든 보상 0으로 강제 |
+| `rewards.format.hard_gate` | `true` | 훈련에서 R_format=0이면 모든 보상 0으로 강제. 평가에는 미적용 |
 | `rewards.no_overlap.weight` | `2.0` | 최고 가중치 보상 (겹침 없음) |
 | `rewards.room_in_outline.weight` | `1.5` | 모든 방·현관문 전체 폴리곤의 외곽선 포함 |
 | `rewards.coverage.weight` | `1.5` | 피복 비율 ≥ 0.774의 이진 판정 |

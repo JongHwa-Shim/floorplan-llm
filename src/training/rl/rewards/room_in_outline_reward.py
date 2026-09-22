@@ -26,8 +26,7 @@ def compute_room_in_outline_reward(parsed: "ParsedFloorplan") -> tuple[float, li
     Raises:
         없음. 유효하지 않은 폴리곤은 실패로 처리한다.
     """
-    if not parsed.success:
-        return 0.0, []
+    # Mod Record: 전체 형식 성공 여부 대신 필요한 외곽선·방·문 기하를 검사한다.
     outline_room = next((room for room in parsed.rooms if room.room_type == "outline"), None)
     if outline_room is None or len(outline_room.coords) < 3:
         return 0.0, []

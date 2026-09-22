@@ -2,6 +2,7 @@
 
 normalize_ours.py의 _evaluation 기록은 파싱 실패 출력도 포함한다. 원본 토큰이
 없는 GT/타 모델의 공통 JSON은 기하 보상 네 개의 참조값에만 사용한다.
+형식 하드 게이트는 훈련 전용이며, 평가는 각 보상을 독립적으로 계산한다.
 """
 
 from __future__ import annotations
@@ -47,9 +48,22 @@ def _load_records(gen_dir: Path) -> dict[str, list[dict]]:
 
 
 def _score_tokens(record: dict, vocab, reward_cfg) -> dict[str, float]:
-    """학습과 같은 파서·보상 등록·형식 게이트로 한 출력을 평가한다."""
+    """공통 파서·보상 함수를 사용하되 훈련용 형식 게이트 없이 평가한다.
+
+    Args:
+        record: 생성 토큰 ID와 실제 입력 조건을 담은 평가 기록.
+        vocab: 평면도 어휘.
+        reward_cfg: 보상별 설정. 훈련용 설정값을 변경하지 않는다.
+
+    Returns:
+        복원된 데이터에 각 함수를 독립적으로 적용한 10개 이진 보상.
+
+    Raises:
+        ValueError: 활성 보상이 10개가 아니거나 이진값이 아닐 때.
+    """
     rewards = compute_all_rewards(
         record["generated_token_ids"], vocab, record["condition_metadata"], reward_cfg,
+        apply_format_gate=False,
     )["rewards"]
     if set(rewards) != set(REWARD_NAMES) or any(v not in (0.0, 1.0) for v in rewards.values()):
         raise ValueError("평가 보상이 활성 10개 이진 보상과 일치하지 않습니다.")

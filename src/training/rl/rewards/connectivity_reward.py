@@ -53,8 +53,12 @@ def compute_connectivity_reward(
 
     Returns:
         모든 지정 문 연결이 충족되면 1.0, 하나라도 미충족이면 0.0.
+
+    Raises:
+        없음.
     """
-    if not parsed.success or not parsed.rooms:
+    # Mod Record: 형식 오류와 독립적으로 복원된 방·문 연결을 평가한다.
+    if not parsed.rooms:
         return 0.0
 
     edges = metadata.get("edges", [])

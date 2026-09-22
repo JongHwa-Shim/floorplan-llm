@@ -35,14 +35,13 @@ def compute_polygon_fidelity_reward(
     """
     if not np.isfinite(tolerance) or tolerance < 0:
         raise ValueError("tolerance는 유한한 0 이상의 값이어야 합니다.")
-    if not parsed.success:
+    # Mod Record: 형식 오류가 있어도 복원된 꼭짓점의 충실도는 독립적으로 검사한다.
+    if not parsed.rooms:
         return 0.0, []
     inputs = [room for room in metadata.get("rooms", []) if room.get("coords")]
     if not inputs:
         return 1.0, []
     outputs = parsed.rooms
-    if not outputs:
-        return 0.0, []
 
     # 최대 16개 방의 작은 할당 문제이며, 좌표 거리 계산만 NumPy로 벡터화한다.
     costs = np.full((len(inputs), len(outputs)), 1e12)

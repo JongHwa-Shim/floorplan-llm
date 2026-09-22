@@ -29,8 +29,7 @@ def compute_coverage_reward(parsed: "ParsedFloorplan", threshold: float = 0.774)
     """
     if not 0 <= threshold <= 1:
         raise ValueError("coverage threshold는 0과 1 사이여야 합니다.")
-    if not parsed.success:
-        return 0.0
+    # Mod Record: 형식 실패와 별개로 복원된 외곽선과 방의 피복을 검사한다.
     outline_room = next((room for room in parsed.rooms if room.room_type == "outline"), None)
     if outline_room is None or len(outline_room.coords) < 3:
         return 0.0

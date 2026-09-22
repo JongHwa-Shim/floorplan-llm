@@ -32,21 +32,26 @@ TOKEN_CREDIT_REWARDS = frozenset((
 
 def compute_all_rewards(
     token_ids: list[int], vocab: "Vocab", metadata: dict, reward_cfg: "DictConfig",
+    *, apply_format_gate: bool = True,
 ) -> dict:
     """출력을 한 번 파싱하고 활성 보상과 마스크를 반환한다.
 
     Mod Record: 위반이 없는 국소화 가능 보상에도 0 마스크를 만든다.
     그래야 Eq. (7)의 정상 토큰 α 조정이 성공 시퀀스에도 적용된다.
     format 보상 제거 실험에서는 gate도 꺼지며, 나머지 실험에서는 유지된다.
+    Mod Record: 평가는 apply_format_gate=False로 호출한다. 개별 보상은
+    전체 파싱 성공 여부 대신 복원된 데이터에 자신의 조건을 적용한다.
 
     Args:
         token_ids: completion 토큰 ID.
         vocab: 평면도 어휘.
         metadata: 입력에 실제 노출된 조건.
         reward_cfg: 보상별 활성화·가중치·신용 할당·임계값 설정.
+        apply_format_gate: 훈련용 형식 게이트 적용 여부. 평가에서는 False.
 
     Returns:
         rewards, error_masks, hard_gate_pass, parsed를 포함하는 딕셔너리.
+        hard_gate_pass는 게이트 적용 여부와 별개로 Format 통과 여부를 나타낸다.
 
     Raises:
         ValueError: 보상 임계값이 잘못된 경우.
@@ -55,7 +60,7 @@ def compute_all_rewards(
     format_reward, format_errors = compute_format_reward(parsed)
     format_cfg = reward_cfg.get("format", {})
     gate_failed = (
-        format_reward == 0 and format_cfg.get("enabled", True)
+        apply_format_gate and format_reward == 0 and format_cfg.get("enabled", True)
         and format_cfg.get("hard_gate", True)
     )
     rewards: dict[str, float] = {}
