@@ -178,6 +178,14 @@ class _OutputParser:
             )
         self.pos = output_pos + 1
 
+        # 논문의 형식 gate: 출력 경계와 현관문 블록은 각각 정확히 한 번 필요하다.
+        for boundary in (self.OUTPUT, self.END_OUTPUT, self.FRONT_DOOR):
+            positions = [i for i, token in enumerate(self.ids) if token == boundary]
+            if len(positions) != 1:
+                self.error_indices.extend(positions or [max(0, self.n - 1)])
+        if output_pos != 0:
+            self.error_indices.extend(range(output_pos))
+
         # Level 1: FRONT_DOOR 파싱
         front_door = self._parse_front_door()
 
@@ -186,6 +194,10 @@ class _OutputParser:
 
         # <END_OUTPUT> 이전까지 DOOR 블록 파싱
         doors = self._parse_doors()
+
+        # END_OUTPUT 이후에는 EOS/패딩만 허용한다.
+        allowed_tail = {self.vocab.eos_token_id, self._id.get("<PAD>")}
+        self.error_indices.extend(i for i in range(self.pos, self.n) if self.ids[i] not in allowed_tail)
 
         # 파싱 완전 성공 여부 판단
         success = (
@@ -224,6 +236,7 @@ class _OutputParser:
             {cx, cy, w, h} 딕셔너리. 없거나 파싱 실패 시 None.
         """
         if not self._peek(self.FRONT_DOOR):
+            self.error_indices.append(min(self.pos, max(0, self.n - 1)))
             return None
         self.pos += 1  # <FRONT_DOOR> 소비
 
@@ -232,6 +245,8 @@ class _OutputParser:
             self.pos += 1  # <NO_DOOR>
             if self._peek(self.END_DOOR):
                 self.pos += 1
+            else:
+                self.error_indices.append(min(self.pos, max(0, self.n - 1)))
             return None
 
         # 좌표 파싱: cx, cy, SEP_DOOR, w, h
@@ -340,8 +355,8 @@ class _OutputParser:
         else:
             self.error_indices.append(self.pos)
 
-        # 최소 4쌍 (직사각형 최소 꼭짓점)
-        if len(coords) < 4:
+        # 논문 형식 정의: 최소 4개이며 짝수 개의 꼭짓점이 필요하다.
+        if len(coords) < 4 or len(coords) % 2:
             self.error_indices.extend(range(block_start, self.pos))
 
         return ParsedRoom(

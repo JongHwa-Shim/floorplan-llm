@@ -1,114 +1,53 @@
-"""R_coverage 보상함수 모듈.
-
-outline 내부의 빈공간(어떤 방도 차지하지 않은 영역) 비율을 페널티로 환산하는 보상.
-
-R_coverage는 R_room_in_outline의 쌍대(dual) 보상이다:
-    - R_room_in_outline: 방 → outline 포함 (방이 outline 밖으로 삐져나가는지)
-    - R_coverage:        outline → 방들 합집합 포함 (outline 내 빈공간이 있는지)
-두 보상이 모두 1.0이어야 비로소 "$\\text{outline} = \\bigsqcup_i \\text{room}_i$"라는
-평면도의 본질 제약이 강제된다. 단독 사용 시 reward hacking 여지가 남는다.
-
-수식:
-    $$R_{\\text{coverage}} = 1 - \\frac{\\text{area}(O \\setminus \\bigcup_i R_i)}{\\text{area}(O)}$$
-    - $O$: outline 폴리곤
-    - $R_i$: 비-outline 방 폴리곤
-
-신용할당: 없음 (sequence-level 보상).
-    빈공간 발생 책임 소재가 본질적으로 모호하다. 좌표가 잘못된 방이 원인일 수도,
-    방 개수가 부족해서일 수도 있다. 또한 입력 조건에 좌표 노이즈가 들어가 있어
-    "어느 좌표가 정답인지" 자체가 모호하므로 토큰 단위 페널티는 잘못된 시그널을
-    줄 위험이 크다. 따라서 sequence-level만 사용한다.
-
-의존성: shapely>=2.0.0
-"""
+"""방 합집합의 외곽선 내부 피복 비율을 임계값과 비교하는 이진 보상."""
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
+
+from shapely.geometry import Polygon
+from shapely.ops import unary_union
 
 if TYPE_CHECKING:
     from src.training.rl.rewards.parser import ParsedFloorplan
 
-logger = logging.getLogger(__name__)
 
+def compute_coverage_reward(parsed: "ParsedFloorplan", threshold: float = 0.774) -> float:
+    """외곽선 내부의 피복 비율이 임계값 이상이면 1을 반환한다.
 
-def compute_coverage_reward(
-    parsed: "ParsedFloorplan",
-) -> float:
-    """outline 내부 빈공간 비율의 보수값(1 - empty_ratio)을 반환한다.
-
-    outline 폴리곤에서 모든 비-outline 방의 합집합을 차집합으로 빼낸 영역(빈공간)의
-    면적 비율을 계산하고, 이를 1에서 뺀 값을 보상으로 반환한다. 1.0이면 빈공간 없음
-    (방들이 outline을 완전히 채움), 0.0이면 outline 전체가 빈공간(방이 없거나
-    모든 방이 outline 밖에 있음).
+    Mod Record: 원시 면적 비율을 보상으로 사용하던 방식을 논문의 이진 기준으로
+    바꾼다. 기존 폴리곤 합집합 연산을 유지하며, 래스터화나 최적화 루프는 없다.
 
     Args:
-        parsed: parse_output_tokens()의 반환값.
+        parsed: 파싱된 생성 평면도.
+        threshold: 실평면도 평균에서 정한 피복 비율 기준.
 
     Returns:
-        $[0, 1]$ 범위 스칼라. 빈공간이 적을수록 1에 가깝다.
+        임계값 충족 시 1.0, 미충족 또는 유효하지 않은 폴리곤이면 0.0.
 
     Raises:
-        없음 (모든 예외는 내부에서 처리하며 보수적 반환값 사용).
+        ValueError: threshold가 0과 1 사이가 아닐 때.
     """
-    if not parsed.success or not parsed.rooms:
+    if not 0 <= threshold <= 1:
+        raise ValueError("coverage threshold는 0과 1 사이여야 합니다.")
+    if not parsed.success:
         return 0.0
-
-    try:
-        from shapely.geometry import Polygon
-        from shapely.ops import unary_union
-    except ImportError:
-        logger.warning("shapely 미설치. coverage 보상 계산 불가.")
-        return 1.0
-
-    # outline 폴리곤 생성 (rooms[0]이 outline이지만 명시 검색)
-    outline_room = next((r for r in parsed.rooms if r.room_type == "outline"), None)
+    outline_room = next((room for room in parsed.rooms if room.room_type == "outline"), None)
     if outline_room is None or len(outline_room.coords) < 3:
         return 0.0
-
-    try:
-        outline_poly = Polygon(outline_room.coords)
-        if not outline_poly.is_valid:
-            outline_poly = outline_poly.buffer(0)        # self-intersection 등 정리
-        if outline_poly.is_empty or outline_poly.area <= 0:
-            return 0.0
-    except Exception:
+    outline = Polygon(outline_room.coords)
+    if not outline.is_valid or outline.area <= 0:
         return 0.0
-
-    # 비-outline 방 폴리곤 생성
-    non_outline_rooms = [
-        r for r in parsed.rooms
-        if r.room_type != "outline" and len(r.coords) >= 3
-    ]
-    if not non_outline_rooms:
-        # format_reward가 최소 outline + 1개 방 조건이지만 안전 가드
-        return 0.0
-
-    room_polys = []
-    for room in non_outline_rooms:
-        try:
-            poly = Polygon(room.coords)
-            if not poly.is_valid:
-                poly = poly.buffer(0)
-            if not poly.is_empty and poly.area > 0:
-                room_polys.append(poly)
-        except Exception:
+    polygons = []
+    for room in parsed.rooms:
+        if room.room_type == "outline":
             continue
-
-    if not room_polys:
+        if len(room.coords) < 3:
+            return 0.0
+        polygon = Polygon(room.coords)
+        if not polygon.is_valid or polygon.area <= 0:
+            return 0.0
+        polygons.append(polygon)
+    if not polygons:
         return 0.0
-
-    # 모든 방의 합집합과 outline 차집합으로 빈공간 면적 계산
-    try:
-        union_rooms = unary_union(room_polys)
-        empty = outline_poly.difference(union_rooms)
-    except Exception:
-        # 기하 연산 실패 시 보수적으로 0점 (페널티 발생)
-        return 0.0
-
-    empty_area = max(0.0, float(empty.area))            # 수치 오차로 음수 방지
-    empty_ratio = empty_area / outline_poly.area
-    empty_ratio = max(0.0, min(1.0, empty_ratio))       # [0, 1] 클램핑
-
-    return 1.0 - empty_ratio
+    covered_area = outline.intersection(unary_union(polygons)).area
+    return float(covered_area / outline.area >= threshold)

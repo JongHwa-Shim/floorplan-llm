@@ -36,7 +36,7 @@ from omegaconf import DictConfig
 from trl import GRPOTrainer
 
 from src.training.augmentation.tokenizer import Vocab
-from src.training.rl.rewards import compute_all_rewards
+from src.training.rl.rewards import REWARD_NAMES, compute_all_rewards
 from src.training.rl.advantage import gdpo_group_normalize, compute_token_advantages
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ class RLTrainer(GRPOTrainer):
     """GDPO + 토큰 수준 신용할당 Trainer.
 
     TRL GRPOTrainer를 확장하여 다음을 구현한다:
-        1. 7개 Rule-based 보상함수 (format/count/geometry/connectivity/spatial)
+        1. 논문에 정의된 10개 이진 보상함수
         2. 보상 계산 시 error_mask 자동 생성 및 버퍼 저장
         3. ALL-PROCESS rewards_per_func 캐싱
         4. 스칼라 advantages → 토큰별 advantages 변환 (GDPO + 신용할당 + 배치 정규화)
@@ -254,12 +254,7 @@ class RLTrainer(GRPOTrainer):
             TRL 호환 callable 리스트.
         """
         funcs = []
-        reward_order = [
-            "format", "count_total", "count_type",
-            "orthogonality", "no_overlap",
-            "room_in_outline", "outline_in_room", "coverage",
-            "connectivity", "spatial", "input_consistency",
-        ]
+        reward_order = REWARD_NAMES
 
         for name in reward_order:
             cfg_item = self.reward_cfg.get(name, {})
@@ -509,6 +504,7 @@ class RLTrainer(GRPOTrainer):
             max_seq_len=T,
             eps=eps,
             use_token_credit_assignment=use_token_credit_assignment,
+            gather_fn=self.accelerator.gather,
         )  # (B_local, T)
 
         # advantages 교체: 스칼라 (B_local,) → 토큰별 (B_local, T)

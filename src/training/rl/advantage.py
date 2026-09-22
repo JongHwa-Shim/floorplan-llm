@@ -108,127 +108,94 @@ def compute_token_advantages(
     max_seq_len: int,
     eps: float = 1e-8,
     use_token_credit_assignment: bool = True,
+    gather_fn=None,
 ) -> torch.Tensor:
-    """GDPO 정규화된 A_k로 토큰별 어드밴티지를 계산한다.
+    """Eq. (7)–(10)의 신용 할당, 가중합, 전체 배치 정규화를 수행한다.
 
-    Trainer에서 GDPO 정규화 + 로컬 슬라이싱 후 이 함수를 호출한다.
-
-    처리:
-        ② 보상별 토큰 advantage (신용할당 ON/OFF)
-        ③ 보상 가중합 → token_A_combined
-        ④ 배치 정규화 (시퀀스 수준 대표값)
-
-    신용할당 적용 조건: use_token_credit_assignment AND 보상별 credit_assignment 설정 모두 True.
+    Mod Record: 보상별 배치 연산으로 GPU 스칼라 읽기를 제거한다. 위반이 없는
+    마스크에도 α를 적용하고, 분산 실행에서는 시퀀스 대표값만 모은다.
 
     Args:
-        A_k_local: 로컬 프로세스의 정규화된 보상별 어드밴티지. shape: $(B_{local}, K)$
-        reward_names: 보상함수 이름 리스트 (K개, reward_cfgs와 순서 일치).
-        reward_cfgs: 보상 설정 딕셔너리 리스트 (K개).
-            각 항목: {weight, credit_assignment, enabled,
-                      nominal_gain, faulty_attenuation, penalty_offset}.
-        error_masks_batch: 로컬 배치 오류 마스크.
-            error_masks_batch[i][reward_name] = shape $(L_i,)$ mask tensor.
-        completion_lengths: 각 completion의 실제 토큰 수 리스트.
-        max_seq_len: 패딩 포함 최대 시퀀스 길이 T.
-        eps: 수치 안정성 엡실론.
-        use_token_credit_assignment: False면 모든 신용할당을 비활성화하고
-            균등 broadcast만 사용한다. config에서 전역 토글로 제어.
+        A_k_local: 그룹별 정규화가 끝난 로컬 보상 어드밴티지, $(B, K)$.
+        reward_names: 보상 열 이름.
+        reward_cfgs: 보상 열에 대응하는 설정.
+        error_masks_batch: 시퀀스별 위반 마스크.
+        completion_lengths: 패딩을 제외한 길이.
+        max_seq_len: 패딩을 포함한 길이.
+        eps: 정규화 분모의 안정화 상수.
+        use_token_credit_assignment: 전체 신용 할당 활성화 여부.
+        gather_fn: 전체 프로세스 대표값을 모으는 함수. 단일 프로세스는 None.
 
     Returns:
-        배치 정규화된 토큰별 최종 어드밴티지. shape: $(B_{local}, T)$
+        정규화된 토큰 어드밴티지 $(B, T)$. 패딩은 0.
+
+    Raises:
+        ValueError: 시퀀스 길이가 텐서 범위 밖이거나 배치 크기가 다를 때.
     """
-    device = A_k_local.device
-    B_local = A_k_local.shape[0]
-    T = max_seq_len
-
-    # ② + ③: 보상별 토큰 advantage 계산 및 가중합
-    token_advantages = torch.zeros(B_local, T, device=device)
-
-    for i in range(B_local):
-        seq_len = completion_lengths[i]
-        error_masks_i = error_masks_batch[i] if i < len(error_masks_batch) else {}
-
-        for k, (name, cfg) in enumerate(zip(reward_names, reward_cfgs)):
-            if not cfg.get("enabled", True):
-                continue
-
-            w_k = float(cfg.get("weight", 1.0))
-            A_k_i = A_k_local[i, k].item()  # 스칼라
-
-            token_A_k = torch.zeros(T, device=device)
-
-            # 신용할당 ON/OFF 결정: 전역 토글 AND 보상별 credit_assignment 설정 모두 True
-            use_credit = use_token_credit_assignment and cfg.get("credit_assignment", False)
-            if use_credit:
-                error_mask = error_masks_i.get(name)
-                if error_mask is not None and error_mask.sum() > 0:
-                    # 완전한 마스크 텐서 구성 (seq_len까지만 유효)
-                    mask_len = min(len(error_mask), seq_len)
-                    mask_for_credit = torch.zeros(seq_len, device=device)
-                    mask_for_credit[:mask_len] = error_mask[:mask_len].to(device)
-
-                    # 옵션 F: a_t = A * [1 + sign(A) * (alpha(1-m) - beta*m)] - kappa*m
-                    token_A_seq = apply_token_credit_assignment(
-                        advantage=A_k_i,
-                        error_mask=mask_for_credit,
-                        nominal_gain=float(cfg.get("nominal_gain", 0.0)),
-                        faulty_attenuation=float(cfg.get("faulty_attenuation", 0.0)),
-                        penalty_offset=float(cfg.get("penalty_offset", 0.0)),
-                    )
-                    token_A_k[:seq_len] = token_A_seq
-                else:
-                    # 오류 마스크 없거나 오류 없음 → 균등 broadcast
-                    token_A_k[:seq_len] = A_k_i
-            else:
-                # 신용할당 OFF → 모든 토큰 동일
-                token_A_k[:seq_len] = A_k_i
-
-            token_advantages[i] += w_k * token_A_k
-
-    # ④ 배치 정규화 (시퀀스 수준 대표값 기반, 토큰 차등 보존)
-    token_advantages = _batch_normalize(
-        token_advantages=token_advantages,
-        completion_lengths=completion_lengths,
-        eps=eps,
-    )
-
-    return token_advantages
+    batch_size = A_k_local.shape[0]
+    if len(completion_lengths) != batch_size or any(
+        length < 0 or length > max_seq_len for length in completion_lengths
+    ):
+        raise ValueError("completion_lengths가 배치 크기/시퀀스 범위와 맞지 않습니다.")
+    advantages = A_k_local.new_zeros((batch_size, max_seq_len))
+    for k, (name, cfg) in enumerate(zip(reward_names, reward_cfgs)):
+        if not cfg.get("enabled", True):
+            continue
+        scalar = A_k_local[:, k:k + 1]  # (B, 1)
+        if use_token_credit_assignment and cfg.get("credit_assignment", False):
+            # 파싱으로 생성한 CPU 마스크를 한 번에 전송한다.
+            mask = torch.zeros((batch_size, max_seq_len))
+            for i, length in enumerate(completion_lengths):
+                errors = error_masks_batch[i].get(name) if i < len(error_masks_batch) else None
+                if errors is not None:
+                    count = min(len(errors), length)
+                    mask[i, :count] = errors[:count].detach().cpu()
+            mask = mask.to(device=scalar.device, dtype=scalar.dtype)
+            token_credit = apply_token_credit_assignment(
+                scalar, mask,
+                nominal_gain=float(cfg.get("nominal_gain", 0.0)),
+                faulty_attenuation=float(cfg.get("faulty_attenuation", 0.0)),
+                penalty_offset=float(cfg.get("penalty_offset", 0.0)),
+            )
+        else:
+            token_credit = scalar
+        advantages += float(cfg.get("weight", 1.0)) * token_credit
+    return _batch_normalize(advantages, completion_lengths, eps, gather_fn=gather_fn)
 
 
 def _batch_normalize(
     token_advantages: torch.Tensor,
     completion_lengths: list[int],
     eps: float,
+    gather_fn=None,
 ) -> torch.Tensor:
-    """배치 정규화 (시퀀스 수준 대표값 기반, 토큰 차등 보존).
-
-    각 시퀀스의 completion 토큰 advantage를 평균하여 대표값을 구하고,
-    배치 전체 대표값들의 평균/표준편차로 정규화한다.
-    토큰 간 상대적 차이는 보존된다.
+    """시퀀스 대표값을 전체 생성 배치에서 집계하여 토큰을 정규화한다.
 
     Args:
-        token_advantages: 정규화 전 토큰별 어드밴티지. shape $(B, T)$
-        completion_lengths: 각 completion의 실제 토큰 수.
-        eps: 수치 안정성 엡실론.
+        token_advantages: 가중합 어드밴티지 $(B, T)$.
+        completion_lengths: 패딩을 제외한 각 시퀀스 길이.
+        eps: 분모의 안정화 상수.
+        gather_fn: 전체 프로세스의 $(B, 2)$ 대표값/유효 여부를 모으는 함수.
 
     Returns:
-        정규화된 토큰별 어드밴티지. shape $(B, T)$
+        전체 배치 통계를 적용한 로컬 토큰 어드밴티지. 패딩은 0.
+
+    Raises:
+        없음.
     """
-    B = token_advantages.shape[0]
-    device = token_advantages.device
-
-    # (a) 시퀀스별 completion 토큰 advantage 평균 계산
-    seq_means = torch.zeros(B, device=device)
-    for i in range(B):
-        seq_len = completion_lengths[i]
-        if seq_len > 0:
-            seq_means[i] = token_advantages[i, :seq_len].mean()
-
-    # (b) 배치 통계 계산 (시퀀스 대표값 기반)
-    batch_mean = seq_means.mean()
-    batch_std = seq_means.std() if B > 1 else torch.zeros(1, device=device).squeeze()
-
-    # (c) 모든 토큰에 동일한 배치 통계 적용 (상대적 차이 보존)
-    token_advantages = (token_advantages - batch_mean) / (batch_std + eps)
-
-    return token_advantages
+    lengths = torch.as_tensor(completion_lengths, device=token_advantages.device)
+    valid_tokens = torch.arange(token_advantages.shape[1], device=lengths.device)[None, :] < lengths[:, None]
+    masked = token_advantages.masked_fill(~valid_tokens, 0)
+    means = masked.sum(dim=1) / lengths.clamp_min(1)  # (B,)
+    # 길이 0(잘린 completion 전체가 loss에서 제외된 경우)은 통계에서도 제외한다.
+    representatives = torch.stack((means, (lengths > 0).to(means.dtype)), dim=1)  # (B, 2)
+    if gather_fn is not None:
+        representatives = gather_fn(representatives)  # (M*G, 2)
+    means_all = representatives[representatives[:, 1] > 0, 0]
+    if means_all.numel() == 0:
+        return torch.zeros_like(token_advantages)
+    batch_mean = means_all.mean()
+    # 기존 표본 표준편차 규약을 유지하되 집계 범위를 모든 프로세스로 확장한다.
+    batch_std = means_all.std() if means_all.numel() > 1 else means_all.new_zeros(())
+    normalized = (masked - batch_mean) / (batch_std + eps)
+    return normalized.masked_fill(~valid_tokens, 0)

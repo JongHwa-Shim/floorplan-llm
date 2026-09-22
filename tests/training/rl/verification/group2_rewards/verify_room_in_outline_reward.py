@@ -1,16 +1,4 @@
-"""Group 2: R_room_in_outline 검증 (케이스 A).
-
-의도: 비-outline 방 + front_door가 outline 폴리곤 안에 포함되는지.
-신용할당: outline 밖 꼭짓점만 마킹. 경계 위(covers)는 false positive 방지.
-
-핵심 케이스:
-    - 모두 안 → 1.0
-    - 1px만 outline 밖 → 그 꼭짓점만 error
-    - front_door rb 외부 → w/h 토큰만 error
-    - front_door w=0 (degenerate) → skip, crash 없음
-    - outline 미존재 → 0.0
-    - 방 꼭짓점 < 3 → 그 방 모든 토큰 error
-"""
+"""논문 정렬 회귀 검증: 모든 필수 조건을 충족할 때만 1을 반환한다."""
 
 from __future__ import annotations
 
@@ -108,30 +96,31 @@ def build_cases() -> list[Case]:
                 RoomSpec("bedroom", [(20, 20), (100, 20), (210, 100), (20, 100)]),
             ],
             front_door=FrontDoorSpec(cx=50, cy=10, w=8, h=2),
-            expected_reward=None,  # 정확한 비율은 면적 계산에 따라
+            expected_reward=0.0,  # 일부라도 외부이면 이진 실패
             expected_error_vertices=[(1, 2)],
             forbidden_error_vertices=[(1, 0), (1, 1), (1, 3)],
             tol=1.0,  # 보상값은 검증 안 함
         ),
         Case(
             "front_door_zero_width",
-            "★ front_door w=0 (degenerate) → skip + crash 없음",
+            "★ front_door w=0 (degenerate) → 유효하지 않은 현관문으로 0",
             rooms=[outline, inside],
             front_door=FrontDoorSpec(cx=50, cy=10, w=0, h=2),
-            # 면적 0 front_door는 점수 미반영 → 방 1개만 평가, 1.0
-            expected_reward=1.0,
+            # 면적 0 현관문은 유효하지 않으므로 포함 보상 실패.
+            expected_reward=0.0,
             expected_error_vertices=[],
+            expected_fd_error_indices=[2, 3],
         ),
         Case(
             "front_door_rb_outside",
-            "★ front_door right-bottom (cx+w, cy+h)이 outline 밖 → w/h 토큰만 error",
+            "★ 중심 기준 현관문 오른쪽·아래쪽 모서리가 outline 밖 → w/h 토큰만 error",
             rooms=[outline, inside],
-            # cx=195, cy=195, w=10, h=10 → rb=(205,205)는 outline 밖 (200,200)
-            # cx,cy=(195,195)는 outline 안
-            front_door=FrontDoorSpec(cx=195, cy=195, w=10, h=10),
-            expected_reward=None,
+            # cx=196, cy=196, w=10, h=10 → 우하단=(201,201)은 outline 밖
+            # 중심=(196,196)은 outline 안
+            front_door=FrontDoorSpec(cx=196, cy=196, w=10, h=10),
+            expected_reward=0.0,
             expected_fd_error_indices=[2, 3],   # w_idx, h_idx
-            forbidden_fd_error_indices=[0, 1],  # cx, cy 마킹 금지 (left-top은 안)
+            forbidden_fd_error_indices=[0, 1],  # 중심 위치는 outline 안
             tol=1.0,
         ),
         Case(

@@ -35,6 +35,8 @@ GROUP1 = [
                  _VERIF_ROOT / "group1_preprocessing/verify_metadata_after_drops.py"),
 ]
 GROUP2 = [
+    VerifierSpec("Group 2", "manuscript_alignment",
+                 _VERIF_ROOT / "../test_manuscript_alignment.py"),
     VerifierSpec("Group 2", "format",
                  _VERIF_ROOT / "group2_rewards/verify_format_reward.py"),
     VerifierSpec("Group 2", "count_total",
@@ -47,16 +49,12 @@ GROUP2 = [
                  _VERIF_ROOT / "group2_rewards/verify_no_overlap_reward.py"),
     VerifierSpec("Group 2", "room_in_outline",
                  _VERIF_ROOT / "group2_rewards/verify_room_in_outline_reward.py"),
-    VerifierSpec("Group 2", "outline_in_room",
-                 _VERIF_ROOT / "group2_rewards/verify_outline_in_room_reward.py"),
     VerifierSpec("Group 2", "coverage",
                  _VERIF_ROOT / "group2_rewards/verify_coverage_reward.py"),
     VerifierSpec("Group 2", "connectivity",
                  _VERIF_ROOT / "group2_rewards/verify_connectivity_reward.py"),
     VerifierSpec("Group 2", "spatial",
                  _VERIF_ROOT / "group2_rewards/verify_spatial_reward.py"),
-    VerifierSpec("Group 2", "input_consistency",
-                 _VERIF_ROOT / "group2_rewards/verify_input_consistency_reward.py"),
 ]
 GROUP3 = [
     VerifierSpec("Group 3", "gdpo_group_normalize",
@@ -89,7 +87,7 @@ def run_one(spec: VerifierSpec) -> RunResult:
     print(f"{'='*70}")
     try:
         proc = subprocess.run(
-            ["uv", "run", "python", str(spec.path)],
+            [sys.executable, str(spec.path)],
             cwd=str(_REPO_ROOT),
             check=False,
         )

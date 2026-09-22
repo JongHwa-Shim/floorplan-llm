@@ -1,16 +1,4 @@
-"""Group 2: R_no_overlap 검증.
-
-의도: 비-outline 방끼리 면적 겹침이 없어야 함. 침범 꼭짓점만 책임 마킹.
-shapely contains() 사용 → 경계 위 점은 false → 공유 벽 false positive 방지.
-
-핵심 케이스:
-    - 분리된 방 두 개 → 1.0
-    - 한 변 공유 (boundary) → 1.0 (false positive 없음)
-    - 한 점 공유 (corner) → 1.0
-    - 부분 겹침 → 1 - overlap_ratio, 침범 꼭짓점만 error
-    - 완전 포함 → 작은 방의 모든 꼭짓점 error
-    - **★ Self-intersecting polygon (bowtie)**: invalid → no overlap reward 페널티 없음 (finding 후보)
-"""
+"""논문 정렬 회귀 검증: 모든 필수 조건을 충족할 때만 1을 반환한다."""
 
 from __future__ import annotations
 
@@ -125,7 +113,7 @@ def build_cases() -> list[Case]:
             ],
             # bedroom area=2500, kitchen area=2500, total=5000, overlap=625
             # reward = 1 - 625/5000 = 0.875
-            expected_reward=1.0 - 625.0 / 5000.0,
+            expected_reward=0.0,
             # bedroom (60,60)이 kitchen 내부에 포함 → bedroom vertex 2 error
             # kitchen (35,35)이 bedroom 내부에 포함 → kitchen vertex 0 error
             expected_error_vertices=[(1, 2), (2, 0)],
@@ -141,14 +129,14 @@ def build_cases() -> list[Case]:
             ],
             # bedroom area=8100, kitchen area=900, total=9000, overlap=900 (kitchen 전체)
             # reward = 1 - 900/9000 = 0.9
-            expected_reward=1.0 - 900.0 / 9000.0,
+            expected_reward=0.0,
             # kitchen 4 꼭짓점 모두 bedroom 내부 → kitchen vertex 0,1,2,3 error
             expected_error_vertices=[(2, 0), (2, 1), (2, 2), (2, 3)],
             tol=0.01,
         ),
         Case(
             "self_intersecting_bowtie",
-            "★ Self-intersecting polygon (bowtie) → invalid 처리 후 페널티 없음 (finding)",
+            "★ Self-intersecting polygon (bowtie) → 유효하지 않은 기하로 0",
             rooms=[
                 outline,
                 # bowtie: (10,10) → (50,50) → (50,10) → (10,50) → close. 자기교차.
@@ -157,7 +145,7 @@ def build_cases() -> list[Case]:
             ],
             # bowtie는 invalid → buffer(0)로 정리되거나 None 처리. 명확한 보상은 알 수 없으나
             # 일반적으로 1.0 또는 0이 나옴. 검증의 의도는 crash 없음 + 결함 식별.
-            expected_reward=1.0,  # 현재 구현은 invalid polygon 보상 미반영 → 페널티 없음 (finding)
+            expected_reward=0.0,  # 유효하지 않은 기하를 만점 처리하지 않는다.
             expected_error_vertices=None,  # 검사 안 함
             tol=0.5,  # 매우 관대
         ),

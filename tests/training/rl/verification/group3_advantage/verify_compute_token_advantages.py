@@ -13,7 +13,7 @@
     1. 신용할당 ON 보상의 mask가 토큰별 advantage에 정확히 적용되는가
     2. 가중합 정확성
     3. 신용할당 OFF는 균등 broadcast인가
-    4. ★ outline_in_room이 trainer.reward_order에서 누락되지 않았는가 (F-1 회귀 가드)
+    4. ★ polygon_fidelity이 trainer.reward_order에서 누락되지 않았는가 (F-1 회귀 가드)
     5. ★ 옵션 F 4-cell 의도 (4가지 신규 케이스)
         - A>0, 정상: A(1+alpha) > A
         - A>0, 오류: A(1-beta) - kappa < A
@@ -259,16 +259,16 @@ def case_weighted_sum():
         f"오류 없는 시퀀스 균일: seq1={seq1}"
 
 
-def case_outline_in_room_in_reward_order():
-    """★★★ F-1 수정 회귀 가드: trainer.reward_order에 outline_in_room이 포함되어야 함."""
+def case_polygon_fidelity_in_reward_order():
+    """★★★ F-1 수정 회귀 가드: trainer.reward_order에 polygon_fidelity이 포함되어야 함."""
     A_k_local = torch.tensor([[1.0], [1.0]])
     error_masks_batch = [
-        {"outline_in_room": torch.tensor([0.0, 1.0, 0.0])},
-        {"outline_in_room": torch.tensor([0.0, 0.0, 0.0])},
+        {"polygon_fidelity": torch.tensor([0.0, 1.0, 0.0])},
+        {"polygon_fidelity": torch.tensor([0.0, 0.0, 0.0])},
     ]
     token_adv = compute_token_advantages(
         A_k_local=A_k_local,
-        reward_names=["outline_in_room"],
+        reward_names=["polygon_fidelity"],
         reward_cfgs=[_make_cfg(
             credit_assignment=True,
             nominal_gain=0.2, faulty_attenuation=0.5, penalty_offset=1.0,
@@ -280,8 +280,8 @@ def case_outline_in_room_in_reward_order():
     )
     seq0 = token_adv[0]
     assert seq0[1].item() < seq0[0].item(), \
-        f"★ F-1 회귀: outline_in_room mask가 advantage에 반영되지 않음. seq0={seq0}"
-    print("     [PASS] outline_in_room mask가 advantage 가중합에 정상 반영됨")
+        f"★ F-1 회귀: polygon_fidelity mask가 advantage에 반영되지 않음. seq0={seq0}"
+    print("     [PASS] polygon_fidelity mask가 advantage 가중합에 정상 반영됨")
 
 
 def case_padding_zero_in_advantage():
@@ -332,7 +332,7 @@ def main():
         _Case("credit_off_uniform",          "신용할당 OFF는 균등 broadcast",                       case_credit_off_uniform),
         _Case("global_toggle_off",           "use_token_credit_assignment=False 전역 OFF",           case_global_toggle_off),
         _Case("weighted_sum",                "다중 보상 가중합 정확성 (CA on/off 혼합)",            case_weighted_sum),
-        _Case("outline_in_room_in_order",    "★★★ outline_in_room이 reward_order 포함 회귀 가드 (F-1)",  case_outline_in_room_in_reward_order),
+        _Case("polygon_fidelity_in_order",    "★★★ polygon_fidelity이 reward_order 포함 회귀 가드 (F-1)",  case_polygon_fidelity_in_reward_order),
         _Case("padding_shape",               "패딩 포함 max_seq_len shape 정확",                    case_padding_zero_in_advantage),
     ]
     results = run_cases(cases, lambda c: c.fn(), label="Group 3: compute_token_advantages (옵션 F)")

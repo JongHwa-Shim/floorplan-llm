@@ -1,15 +1,4 @@
-"""Group 2: R_coverage 검증.
-
-의도: outline 내부의 빈 공간이 방으로 얼마나 채워졌는가 (R_room_in_outline의 쌍대).
-신용할당: 없음 (sequence-level only). 책임 모호 + 노이즈 영향.
-
-핵심 케이스:
-    - 방들이 outline 완전 채움 → 1.0
-    - 작은 방 1개로 25%만 채움 (room_in_outline=1.0과 분리) → 0.25
-    - 방이 outline 완전히 밖 (또는 outline 없음) → 0.0
-    - 신용할당 OFF: error_masks에 "coverage" 키 없거나 모두 0
-    - **★ outline에 작은 방 1개**: room_in_outline=1.0이지만 coverage 매우 낮음 → dual reward 강조
-"""
+"""논문 정렬 회귀 검증: 모든 필수 조건을 충족할 때만 1을 반환한다."""
 
 from __future__ import annotations
 
@@ -76,23 +65,23 @@ def build_cases() -> list[Case]:
         ),
         Case(
             "quarter_filled",
-            "★ 작은 방 1개로 25% 채움 (50×50/100×100 outline) → 0.25 미만",
+            "★ 작은 방 1개로 25% 채움 (50×50/100×100 outline) → 피복 임계값 0.774 미달로 0",
             rooms=[
                 RoomSpec("outline", [(0, 0), (100, 0), (100, 100), (0, 100)]),  # area=10000
                 RoomSpec("bedroom", [(0, 0), (50, 0), (50, 50), (0, 50)]),      # area=2500
             ],
             # 빈공간 = 7500, ratio=0.75, reward=0.25
-            expected_reward=0.25,
+            expected_reward=0.0,
             tol=0.01,
         ),
         Case(
             "half_filled",
-            "방 1개로 50% 채움 → 0.5",
+            "방 1개로 50% 채움 → 임계값 미달로 0",
             rooms=[
                 outline,
                 RoomSpec("bedroom", [(0, 0), (200, 0), (200, 100), (0, 100)]),  # 20000/40000
             ],
-            expected_reward=0.5,
+            expected_reward=0.0,
         ),
         Case(
             "outside_outline",
@@ -122,7 +111,7 @@ def build_cases() -> list[Case]:
                 RoomSpec("kitchen", [(40, 40), (100, 40), (100, 100), (40, 100)]),  # 3600
             ],
             # 합집합: 3600 + 3600 - 400 = 6800. 빈공간 = 3200. ratio=0.32. reward=0.68
-            expected_reward=0.68,
+            expected_reward=0.0,
             tol=0.02,
         ),
     ]

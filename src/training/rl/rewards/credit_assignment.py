@@ -27,7 +27,6 @@ Mod Record:
 from __future__ import annotations
 
 import logging
-import math
 
 import torch
 
@@ -56,7 +55,7 @@ def build_error_mask(
 
 
 def apply_token_credit_assignment(
-    advantage: float,
+    advantage: float | torch.Tensor,
     error_mask: torch.Tensor,
     nominal_gain: float,
     faulty_attenuation: float,
@@ -98,7 +97,8 @@ def apply_token_credit_assignment(
     """
     # sign(0)=0이므로 A=0일 때는 정상/오류 모두 magnitude 변형 항이 0이 되고,
     # 오류 토큰에는 -kappa만 남는 구조.
-    sign_a = math.copysign(1.0, advantage) if advantage != 0.0 else 0.0
+    advantage = torch.as_tensor(advantage, device=error_mask.device, dtype=error_mask.dtype)
+    sign_a = advantage.sign()
     nominal_factor = 1.0 + nominal_gain * sign_a
     faulty_factor = 1.0 - faulty_attenuation * sign_a
 

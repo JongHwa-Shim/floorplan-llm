@@ -1,14 +1,4 @@
-"""Group 2: R_count_type 검증.
-
-의도: 노출된 type별 개수 정확도 평균 (drop된 type은 채점 제외).
-이전 버그: 출력에 hallucinated/drop된 type 포함 시 부당 0점 — 수정 후 무시.
-
-핵심 케이스:
-    - drop된 type을 모델이 출력 → 무시 (채점 제외) → 1.0
-    - 부분 일치 (3 expected, 2 actual) → 0.667
-    - hallucinated type (expected에 없는 type 출력) → 무시 (silent allow). 이는
-      의도일 수 있지만 사용자 의도 확인 필요 → finding 후보.
-"""
+"""논문 정렬 회귀 검증: 모든 필수 조건을 충족할 때만 1을 반환한다."""
 
 from __future__ import annotations
 
@@ -68,10 +58,10 @@ def build_cases() -> list[Case]:
         ),
         Case(
             "partial_match_two_thirds",
-            "expected bedroom 3, 출력 2 → score=2/3 (단일 타입이므로 평균=2/3)",
+            "expected bedroom 3, 출력 2 → 지정 개수 불일치로 0",
             rooms=[outline, _make_room("bedroom", 20), _make_room("bedroom", 60)],
             metadata=build_metadata(total_rooms=3, type_counts={"bedroom": 3}),
-            expected=2.0 / 3.0,
+            expected=0.0,
         ),
         Case(
             "drop_type_ignored",
@@ -96,10 +86,10 @@ def build_cases() -> list[Case]:
         ),
         Case(
             "missing_expected_type",
-            "expected={bedroom:1, kitchen:1}, 출력에 bedroom만 → score=(1+0)/2=0.5",
+            "expected={bedroom:1, kitchen:1}, 출력에 bedroom만 → 한 종류라도 불일치하여 0",
             rooms=[outline, _make_room("bedroom", 20)],
             metadata=build_metadata(total_rooms=2, type_counts={"bedroom": 1, "kitchen": 1}),
-            expected=0.5,
+            expected=0.0,
         ),
         Case(
             "expected_zero_actual_zero",

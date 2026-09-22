@@ -1,16 +1,4 @@
-"""Group 2: R_spatial 검증.
-
-의도: 입력 spatial 조건의 8방위 방향이 출력 방 무게중심 벡터와 일치.
-앵커는 헝가리안 결정 매핑, 자유 방은 후보 satisfiability.
-
-핵심 케이스:
-    - "right" 정확 일치 → 1.0
-    - 22.5° 경계각 (`<` vs `<=` 부동소수점 검증)
-    - direction 명백 불일치 → 0.0
-    - drop_coords + 다른 type 매칭 가능 → satisfiability
-    - 영벡터 (centroid 일치) skip → 분모 0이면 1.0
-    - drop_pair는 spatial 채점에 영향 없음 (spatial은 metadata.spatial 직접 참조)
-"""
+"""논문 정렬 회귀 검증: 모든 필수 조건을 충족할 때만 1을 반환한다."""
 
 from __future__ import annotations
 
@@ -116,7 +104,7 @@ def build_cases() -> list[Case]:
         ),
         Case(
             "two_conditions_partial",
-            "spatial 2개 중 1개 만족 → 0.5",
+            "spatial 2개 중 1개 미충족 → 0",
             rooms=[outline, bed1, bed2],
             metadata=build_metadata(
                 rooms=[bed1_meta, bed2_meta],
@@ -126,7 +114,7 @@ def build_cases() -> list[Case]:
                 ],
                 total_rooms=2, type_counts={"bedroom": 2},
             ),
-            expected=0.5,
+            expected=0.0,
         ),
     ]
 

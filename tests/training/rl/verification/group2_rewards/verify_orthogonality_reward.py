@@ -1,15 +1,4 @@
-"""Group 2: R_orthogonality 검증.
-
-의도: 모든 방의 모든 꼭짓점이 직각이어야 함. 비직각 꼭짓점만 신용할당.
-영벡터(중복 꼭짓점)는 skip하여 crash 방지.
-
-핵심 케이스:
-    - 정상 직각 → 1.0, error 없음
-    - 1px 미세 비직각 → <1, 그 꼭짓점만 X/Y error
-    - 영벡터 (중복 꼭짓점) → skip, crash 없음
-    - 한 꼭짓점만 비직각 → (n-1)/n, 그 한 점만 error
-    - format=1, orthogonality<1 (의도 분리)
-"""
+"""논문 정렬 회귀 검증: 모든 필수 조건을 충족할 때만 1을 반환한다."""
 
 from __future__ import annotations
 
@@ -94,27 +83,27 @@ def build_cases() -> list[Case]:
             "★ 한 꼭짓점 1px 어긋남 → 인접 3꼭짓점이 비직각",
             rooms=[outline, RoomSpec("bedroom", [(20, 20), (100, 20), (100, 100), (21, 99)])],
             # vertex 1만 직각, 나머지 3 비직각. outline 4 + bedroom 1 = 5/8 = 0.625
-            expected_reward=5.0 / 8.0,
+            expected_reward=0.0,
             expected_error_vertices=[(1, 0), (1, 2), (1, 3)],
             forbidden_error_vertices=[(0, 0), (0, 1), (0, 2), (0, 3), (1, 1)],
             tol=0.001,
         ),
         Case(
             "duplicate_vertex_zero_vector",
-            "중복 꼭짓점 (영벡터) → 해당 꼭짓점 skip, crash 없음",
+            "중복 꼭짓점 (영벡터) → 길이 0인 변도 직각 위반으로 0",
             rooms=[outline, RoomSpec("bedroom", [(20, 20), (20, 20), (100, 100), (20, 100)])],
             # vertex 0/1: 영벡터 (skip), vertex 2 (100,100): prev=(20,20), next=(20,100). v1=(-80,-80), v2=(-80,0). dot=6400+0. 비직각
             # vertex 3 (20,100): prev=(100,100), next=(20,20). v1=(80,0), v2=(0,-80). dot=0. 직각
             # outline 4 + bedroom 1 (vertex 3 직각) + bedroom 1 비직각 = 5직 / 6평가 = 5/6
-            expected_reward=5.0 / 6.0,
-            expected_error_vertices=[(1, 2)],
+            expected_reward=0.0,
+            expected_error_vertices=[(1, 0), (1, 1), (1, 2)],
             tol=0.01,
         ),
         Case(
             "trapezoid_all_off",
-            "사다리꼴 (모든 꼭짓점 비직각) → outline 4 + bedroom 0 = 4/8 = 0.5",
+            "사다리꼴 (모든 꼭짓점 비직각) → 직각 위반이 있으므로 0",
             rooms=[outline, RoomSpec("bedroom", [(50, 30), (100, 30), (110, 80), (40, 80)])],
-            expected_reward=4.0 / 8.0,
+            expected_reward=0.0,
             expected_error_vertices=[(1, 0), (1, 1), (1, 2), (1, 3)],
             tol=0.05,
         ),

@@ -93,18 +93,19 @@ floorplan-llm/
 │   │       ├── advantage.py        # GDPO 정규화 + 토큰 신용할당 + 배치 정규화
 │   │       ├── trainer.py          # RLTrainer (GRPOTrainer 서브클래스)
 │   │       ├── diagnostics.py      # MemoryDiagnosticCallback (DDP rank별 alloc/reserved/peak 출력, 디버그용)
-│   │       └── rewards/            # 11개 규칙 기반 보상함수
+│   │       └── rewards/            # 10개 활성 이진 보상함수
 │   │           ├── __init__.py     # compute_all_rewards 공개 API
 │   │           ├── parser.py       # 생성 토큰 파싱 (ParsedFloorplan, front_door_token_indices 포함)
 │   │           ├── format_reward.py
 │   │           ├── geometry_reward.py
 │   │           ├── room_in_outline_reward.py    # 방 + front door의 outline 포함 검증 (케이스 A)
-│   │           ├── outline_in_room_reward.py    # outline 꼭짓점이 방 내부에 포함되는지 (케이스 B)
+│   │           ├── outline_in_room_reward.py    # 이전 실험용, 현재 학습 미등록
 │   │           ├── coverage_reward.py           # outline 내 빈공간 비율 (room_in_outline 쌍대)
 │   │           ├── connectivity_reward.py       # 헝가리안 + 후보 기반 satisfiability
 │   │           ├── count_reward.py
 │   │           ├── spatial_reward.py            # 후보 기반 satisfiability
-│   │           ├── input_consistency_reward.py  # 입력 앵커 방 무게중심 일관성
+│   │           ├── input_consistency_reward.py  # 이전 실험용, 현재 학습 미등록
+│   │           ├── polygon_fidelity_reward.py   # 입력 꼭짓점 충실도 및 위반 마스크
 │   │           └── credit_assignment.py  # 토큰 수준 신용할당
 │   ├── inference/                  # 추론 모듈
 │   │   ├── model_loader.py         # Hub NF4 + partial_state.pt 주입 + LoRA adapter 스태킹
@@ -153,7 +154,7 @@ floorplan-llm/
 │   │       └── verification/               # 보상함수·어드밴티지·손실 격리 검증 도구 모음
 │   │           ├── _common.py              # vocab 로더, 토큰 fixture 빌더, reward_cfg 빌더, asserts
 │   │           ├── group1_preprocessing/   # 변형/drop 후 metadata 추출 검증 (2개)
-│   │           ├── group2_rewards/         # 11개 보상함수 의도 격리 검증
+│   │           ├── group2_rewards/         # 10개 활성 이진 보상 검증
 │   │           ├── group3_advantage/       # GDPO·token credit·batch_norm·micro_step (4개)
 │   │           ├── run_all.py              # 일괄 실행 오케스트레이터
 │   │           └── findings.md             # 트랙 A(스크립트) + B(코드 정독) 통합 보고서
@@ -379,9 +380,9 @@ JSONL 원본을 HuggingFace `datasets` 라이브러리의 Arrow 포맷으로 변
 # 기본 변환 (검증 포함)
 uv run python scripts/build_dataset/json2arrow/run_conversion.py
 
-# Split 비율 조정
+# Split 개수 지정
 uv run python scripts/build_dataset/json2arrow/run_conversion.py \
-    split.val_ratio=0.05 split.test_ratio=0.10
+    split.val_size=1000 split.test_size=1000
 
 # Split 없이 전체를 하나로
 uv run python scripts/build_dataset/json2arrow/run_conversion.py \
@@ -671,6 +672,18 @@ data/models/{model.name}/checkpoints/rl/{run_name}/
 
 ---
 
+### 논문 정렬 CPU 검증
+
+```bash
+uv run python -m unittest tests.training.rl.test_manuscript_alignment -v
+```
+
+10개 보상, 조건 생략, 꼭짓점 충실도, format gate, Eq. (7), 실제 2-process CPU gather, 78,788/1,000/1,000 분할, 2,500-step warm-up과 비교 입력을 검사한다. 합성 fixture와 임시 분할을 사용하며 실제 저장 데이터·체크포인트는 변경하지 않는다.
+
+기본 RL 설정은 max_steps=50,000, learning_rate=2e-5, G=16, temperature=0.7, constant_with_warmup 및 warmup_ratio=0.05이다. Table 4 가중치와 α/β/κ=0.3/0.7/1.5를 사용한다. 프로세스 수/장치당 batch/누적 횟수는 Embedding 4/32/1, SFT 4/16/2, RLVR 4/8/4이며 세 단계 모두 곱이 128이다.
+
+신규 vocabulary는 도메인 564개 + PAD 1개다. 기존 567행 tokenizer/partial_state의 ID를 바꾸지 않으며, 새 어휘를 빌드할 때 output.dir을 별도 경로로 지정한다. 기존 어휘와 다른 정의로 같은 경로를 덮어쓰면 오류로 중단한다.
+
 ### RL 검증: 통합 검증 스크립트
 
 모델 로드, 어댑터 구조, 훈련 파라미터 갱신, 보상함수, vLLM/HF 생성을 4단계로 통합 검증한다.
@@ -679,7 +692,7 @@ data/models/{model.name}/checkpoints/rl/{run_name}/
 - **Phase 0:** 파일 존재 확인 (partial_state.pt, SFT adapter, tokenizer, vocab_extension)
 - **Phase 1:** 모델 로드 + vocab_size 일치 + 멀티어댑터 구조 확인 (sft frozen, rl trainable)
 - **Phase 2:** N step 훈련 전후 rl 파라미터 갱신 + sft 파라미터 불변 확인
-- **Phase 3:** 보상함수 9개 계산 + vLLM 또는 HF generate 통합 생성 검증
+- **Phase 3:** 보상함수 10개 계산 + vLLM 또는 HF generate 통합 생성 검증
 
 ```bash
 # HF generate 모드 (vLLM 없이)
@@ -697,9 +710,9 @@ uv run python tests/training/rl/validate_rl.py --use_vllm
 
 `validate_rl.py`(통합 4-phase)와 별개로 **보상함수와 어드밴티지/손실 흐름을 의도 격리 단위로 검증**하는 도구 세트. challenging 엣지케이스 fixture로 각 보상의 책임 범위와 신용할당 토큰 위치까지 직접 단언한다.
 
-**구성 (3 그룹, 17 verifier, 100+ 케이스):**
+**구성 (3 그룹):**
 - **Group 1 — 전처리**: 변형(flip/scale/translate/zoom) 후 좌표가 `_extract_metadata()`에 정확히 반영되는지, 8가지 drop이 metadata 필드별로 올바르게 마스킹되는지 검증
-- **Group 2 — 보상별**: 11개 보상함수(format / count_total / count_type / orthogonality / no_overlap / room_in_outline / outline_in_room / coverage / connectivity / spatial / input_consistency) 각각에 대해 의도-위배 케이스 + 회귀 가드 케이스로 PASS/FAIL 단언
+- **Group 2 — 보상별**: 10개 이진 보상(format / count_total / count_type / orthogonality / no_overlap / room_in_outline / coverage / connectivity / spatial / polygon_fidelity) 각각에 대해 의도-위배 케이스 + 회귀 가드 케이스로 PASS/FAIL 단언
 - **Group 3 — 어드밴티지/손실**: `gdpo_group_normalize`, `compute_token_advantages`, `_batch_normalize` mock 검증 + 실제 모델 1 micro-step E2E (advantages shape, RL adapter trainable / SFT frozen, 캐시 일관성)
 
 ```bash
@@ -799,8 +812,8 @@ model:
 
 | 파라미터 | 기본값 | 설명 |
 |---------|--------|------|
-| `split.val_ratio` | `0.001` | Validation 비율 (0.1%) |
-| `split.test_ratio` | `0.005` | Test 비율 (0.5%) |
+| `split.val_size` | `1000` | 원본 평면도 단위 Validation 개수 |
+| `split.test_size` | `1000` | 원본 평면도 단위 Test 개수 |
 | `split.seed` | `42` | 분리 랜덤 시드 |
 | `validation.enabled` | `true` | 변환 후 검증 여부 |
 | `validation.num_samples` | `10` | 검증 샘플 수 |
@@ -833,25 +846,27 @@ model:
 | `rl.use_vllm` | `false` | vLLM colocate 활성화 (NF4 환경에서는 발산하므로 비활성. bf16 base 전환 시에만 `true` 권장) |
 | `rl.vllm_mode` | `"colocate"` | `"colocate"` (DDP 각 rank 내장) \| `"server"` (별도 GPU) |
 | `rl.vllm_gpu_memory_utilization` | `0.45` | vLLM KV cache 비율 (24GB 기준, OOM 시 0.4로 낮춤) |
-| `rl.num_generations` | `4` | 프롬프트당 rollout 생성 수 (G) |
+| `rl.num_generations` | `16` | 프롬프트당 rollout 생성 수 (G) |
 | `rl.temperature` | `0.7` | 생성 온도 |
 | `rl.kl_coeff` | `0.05` | KL 페널티 계수 (β) |
 | `rl.clip_range` | `0.2` | PPO 클리핑 엡실론 |
 | `advantage.use_token_credit_assignment` | `true` | 토큰 수준 신용할당 전역 토글 |
 | `rewards.format.hard_gate` | `true` | R_format=0이면 모든 보상 0으로 강제 |
 | `rewards.no_overlap.weight` | `2.0` | 최고 가중치 보상 (겹침 없음) |
-| `rewards.room_in_outline.weight` | `1.5` | 비-outline 방 + front door가 outline 경계 내 포함되는지 (케이스 A, 신용할당 ON) |
-| `rewards.outline_in_room.weight` | `1.0` | outline 꼭짓점이 방 내부에 포함되는지 (케이스 B, 신용할당 ON) |
-| `rewards.coverage.weight` | `1.5` | outline 내 빈공간 없는지 (room_in_outline 쌍대, sequence-level) |
-| `rewards.input_consistency.weight` | `1.5` | 입력에 좌표 명시된 방(앵커+drop_type)이 출력에 일관되게 존재하는지 |
-| `rewards.input_consistency.threshold` | `15.0` | 무게중심 거리 임계값(px). 노이즈 3σ=9px + 모델 오차 마진 (transform 증강은 상대 오차 없음) |
-| `rewards.<name>.nominal_gain` | (보상별) | 옵션 F α: 정상 토큰 신용 이득 계수, [0, 1) |
-| `rewards.<name>.faulty_attenuation` | (보상별) | 옵션 F β: 오류 토큰 신용 감쇄 계수, [0, 1) (A>0 감쇄, A<0 증폭) |
-| `rewards.<name>.penalty_offset` | (보상별) | 옵션 F κ: advantage와 무관한 절대 페널티 오프셋, [0, ∞) |
-| `training.learning_rate` | `5e-6` | RL adapter 학습률 |
-| `training.optim` | `"paged_adamw_32bit"` | GPU OOM 방지 (momentum을 CPU RAM에 페이징) |
+| `rewards.room_in_outline.weight` | `1.5` | 모든 방·현관문 전체 폴리곤의 외곽선 포함 |
+| `rewards.coverage.weight` | `1.5` | 피복 비율 ≥ 0.774의 이진 판정 |
+| `rewards.coverage.threshold` | `0.774` | 피복 임계값 |
+| `rewards.polygon_fidelity.weight` | `1.5` | 입력 꼭짓점 충실도, 신용 할당 ON |
+| `rewards.polygon_fidelity.tolerance` | `15.0` | 꼭짓점 거리 허용치(px) |
+| `rewards.<name>.nominal_gain` | `0.3` | 옵션 F α: 정상 토큰 신용 이득 계수, [0, 1) |
+| `rewards.<name>.faulty_attenuation` | `0.7` | 옵션 F β: 오류 토큰 신용 감쇄 계수, [0, 1) (A>0 감쇄, A<0 증폭) |
+| `rewards.<name>.penalty_offset` | `1.5` | 옵션 F κ: advantage와 무관한 절대 페널티 오프셋, [0, ∞) |
+| `training.learning_rate` | `2e-5` | RL adapter 학습률 |
+| `training.max_steps` | `50000` | epoch보다 우선하는 학습 step 수 |
+| `training.warmup_ratio` | `0.05` | 2,500 steps 선형 warm-up 후 일정 학습률 |
+| `training.optim` | `"adamw_torch"` | 기존 NF4 실행 환경의 AdamW 설정 유지 |
 | `training.output_dir` | `data/models/${model.name}/checkpoints/rl/${training.run_name}` | 체크포인트 저장 경로 (run_name 서브디렉토리) |
-| `training.run_name` | `"floorplan-rl"` | W&B run 이름 + 체크포인트 저장 서브디렉토리명 |
+| `training.run_name` | `"260706_rl-paper-aligned-50000"` | W&B run 이름 + 체크포인트 저장 서브디렉토리명 |
 | `hydra.run.dir` | `outputs/training/rl/${now:%Y-%m-%d}/${now:%H-%M-%S}` | Hydra 로그·설정 스냅샷 저장 경로 |
 | `data.max_completion_length` | `512` | 최대 completion 토큰 수 |
 

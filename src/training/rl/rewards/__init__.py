@@ -1,187 +1,98 @@
-"""RL 보상함수 패키지.
-
-모든 보상 계산을 총괄하는 compute_all_rewards() 함수를 제공한다.
-
-보상 목록:
-    - format:             R_format (Hard Gate, 신용할당 ON)
-    - count_total:        R_count_total (이진)
-    - count_type:         R_count_type (연속)
-    - orthogonality:      R_orthogonality (직각도, 신용할당 ON)
-    - no_overlap:         R_no_overlap (겹침, 신용할당 ON)
-    - room_in_outline:    R_room_in_outline (방 꼭짓점이 outline 밖에 있는지, 케이스 A, 신용할당 ON)
-    - outline_in_room:    R_outline_in_room (outline 꼭짓점이 방 안에 포함되는지, 케이스 B, 신용할당 ON)
-    - coverage:           R_coverage (outline 내 빈공간 보수값, sequence-level)
-    - connectivity:       R_connectivity (연결성)
-    - spatial:            R_spatial (공간 관계)
-    - input_consistency:  R_input_consistency (입력 좌표 명시 방 포함 일관성 — 앵커+drop_type)
-"""
+"""논문에 정의된 10개 이진 보상과 토큰별 위반 마스크를 계산한다."""
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
 
 import torch
 
 from src.training.rl.rewards.parser import parse_output_tokens
 from src.training.rl.rewards.format_reward import compute_format_reward
-from src.training.rl.rewards.count_reward import (
-    compute_count_total_reward,
-    compute_count_type_reward,
-)
-from src.training.rl.rewards.geometry_reward import (
-    compute_orthogonality_reward,
-    compute_no_overlap_reward,
-)
+from src.training.rl.rewards.count_reward import compute_count_total_reward, compute_count_type_reward
+from src.training.rl.rewards.geometry_reward import compute_orthogonality_reward, compute_no_overlap_reward
 from src.training.rl.rewards.room_in_outline_reward import compute_room_in_outline_reward
-from src.training.rl.rewards.outline_in_room_reward import compute_outline_in_room_reward
 from src.training.rl.rewards.coverage_reward import compute_coverage_reward
 from src.training.rl.rewards.connectivity_reward import compute_connectivity_reward
 from src.training.rl.rewards.spatial_reward import compute_spatial_reward
-from src.training.rl.rewards.input_consistency_reward import (
-    compute_input_consistency_reward,
-    _ANCHOR_DISTANCE_THRESHOLD,
-)
+from src.training.rl.rewards.polygon_fidelity_reward import compute_polygon_fidelity_reward
 from src.training.rl.rewards.credit_assignment import build_error_mask
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
     from src.training.augmentation.tokenizer import Vocab
 
-logger = logging.getLogger(__name__)
+REWARD_NAMES = (
+    "format", "count_total", "count_type", "orthogonality", "no_overlap",
+    "room_in_outline", "coverage", "connectivity", "spatial", "polygon_fidelity",
+)
+TOKEN_CREDIT_REWARDS = frozenset((
+    "format", "orthogonality", "no_overlap", "room_in_outline", "polygon_fidelity",
+))
 
 
 def compute_all_rewards(
-    token_ids: list[int],
-    vocab: "Vocab",
-    metadata: dict,
-    reward_cfg: "DictConfig",
+    token_ids: list[int], vocab: "Vocab", metadata: dict, reward_cfg: "DictConfig",
 ) -> dict:
-    """모든 보상을 계산하고 에러 마스크를 함께 반환한다.
+    """출력을 한 번 파싱하고 활성 보상과 마스크를 반환한다.
 
-    처리 흐름:
-        1. 출력 토큰 파싱 (parse_output_tokens)
-        2. R_format 평가 (Hard Gate)
-        3. R_format=0이면 모든 보상 0 (Hard Gate 강제)
-        4. 나머지 보상 계산
-        5. 신용할당 ON인 보상의 error_mask 생성
+    Mod Record: 위반이 없는 국소화 가능 보상에도 0 마스크를 만든다.
+    그래야 Eq. (7)의 정상 토큰 α 조정이 성공 시퀀스에도 적용된다.
+    format 보상 제거 실험에서는 gate도 꺼지며, 나머지 실험에서는 유지된다.
 
     Args:
-        token_ids: completion 토큰 ID 리스트 (<OUTPUT>부터).
-        vocab: Vocab 객체.
-        metadata: 입력 조건 메타데이터 딕셔너리.
-        reward_cfg: Hydra DictConfig. rewards 섹션.
+        token_ids: completion 토큰 ID.
+        vocab: 평면도 어휘.
+        metadata: 입력에 실제 노출된 조건.
+        reward_cfg: 보상별 활성화·가중치·신용 할당·임계값 설정.
 
     Returns:
-        dict:
-            - rewards (dict[str, float]): 보상명 → 스칼라 보상값.
-            - error_masks (dict[str, Tensor]): 보상명 → shape $(L,)$ 마스크.
-                신용할당 ON인 보상만 포함.
-            - hard_gate_pass (bool): R_format >= 1.0이면 True.
-            - parsed: ParsedFloorplan 인스턴스 (디버깅용).
+        rewards, error_masks, hard_gate_pass, parsed를 포함하는 딕셔너리.
+
+    Raises:
+        ValueError: 보상 임계값이 잘못된 경우.
     """
-    seq_length = len(token_ids)
-
-    # 파싱
     parsed = parse_output_tokens(token_ids, vocab)
-
-    # R_format (Hard Gate)
-    format_reward, format_error_indices = compute_format_reward(parsed)
-    hard_gate_pass = format_reward >= 1.0
-
+    format_reward, format_errors = compute_format_reward(parsed)
+    format_cfg = reward_cfg.get("format", {})
+    gate_failed = (
+        format_reward == 0 and format_cfg.get("enabled", True)
+        and format_cfg.get("hard_gate", True)
+    )
     rewards: dict[str, float] = {}
     error_masks: dict[str, torch.Tensor] = {}
-
-    # R_format 결과 저장
-    cfg_format = reward_cfg.get("format", {})
-    if cfg_format.get("enabled", True):
-        rewards["format"] = format_reward
-        if cfg_format.get("credit_assignment", False) and format_error_indices:
-            error_masks["format"] = build_error_mask(seq_length, format_error_indices)
-
-    # Hard Gate: format 실패 시 나머지 보상 모두 0
-    if not hard_gate_pass:
-        for name in ("count_total", "count_type", "orthogonality", "no_overlap",
-                     "room_in_outline", "outline_in_room", "coverage",
-                     "connectivity", "spatial", "input_consistency"):
-            cfg = reward_cfg.get(name, {})
-            if cfg.get("enabled", True):
-                rewards[name] = 0.0
-        return {
-            "rewards": rewards,
-            "error_masks": error_masks,
-            "hard_gate_pass": False,
-            "parsed": parsed,
-        }
-
-    # R_count_total
-    cfg = reward_cfg.get("count_total", {})
-    if cfg.get("enabled", True):
-        rewards["count_total"] = compute_count_total_reward(parsed, metadata)
-
-    # R_count_type
-    cfg = reward_cfg.get("count_type", {})
-    if cfg.get("enabled", True):
-        rewards["count_type"] = compute_count_type_reward(parsed, metadata)
-
-    # R_orthogonality
-    cfg = reward_cfg.get("orthogonality", {})
-    if cfg.get("enabled", True):
-        orth_reward, orth_errors = compute_orthogonality_reward(parsed)
-        rewards["orthogonality"] = orth_reward
-        if cfg.get("credit_assignment", False) and orth_errors:
-            error_masks["orthogonality"] = build_error_mask(seq_length, orth_errors)
-
-    # R_no_overlap
-    cfg = reward_cfg.get("no_overlap", {})
-    if cfg.get("enabled", True):
-        no_overlap_reward, no_overlap_errors = compute_no_overlap_reward(parsed)
-        rewards["no_overlap"] = no_overlap_reward
-        if cfg.get("credit_assignment", False) and no_overlap_errors:
-            error_masks["no_overlap"] = build_error_mask(seq_length, no_overlap_errors)
-
-    # R_room_in_outline
-    cfg = reward_cfg.get("room_in_outline", {})
-    if cfg.get("enabled", True):
-        rio_reward, rio_errors = compute_room_in_outline_reward(parsed)
-        rewards["room_in_outline"] = rio_reward
-        if cfg.get("credit_assignment", False) and rio_errors:
-            error_masks["room_in_outline"] = build_error_mask(seq_length, rio_errors)
-
-    # R_outline_in_room (케이스 B: outline 꼭짓점이 방 내부에 포함되는지)
-    cfg = reward_cfg.get("outline_in_room", {})
-    if cfg.get("enabled", True):
-        otr_reward, otr_errors = compute_outline_in_room_reward(parsed)
-        rewards["outline_in_room"] = otr_reward
-        if cfg.get("credit_assignment", False) and otr_errors:
-            error_masks["outline_in_room"] = build_error_mask(seq_length, otr_errors)
-
-    # R_coverage (sequence-level only, 신용할당 미지원)
-    cfg = reward_cfg.get("coverage", {})
-    if cfg.get("enabled", True):
-        rewards["coverage"] = compute_coverage_reward(parsed)
-
-    # R_connectivity
-    cfg = reward_cfg.get("connectivity", {})
-    if cfg.get("enabled", True):
-        rewards["connectivity"] = compute_connectivity_reward(parsed, metadata)
-
-    # R_spatial
-    cfg = reward_cfg.get("spatial", {})
-    if cfg.get("enabled", True):
-        rewards["spatial"] = compute_spatial_reward(parsed, metadata)
-
-    # R_input_consistency
-    cfg = reward_cfg.get("input_consistency", {})
-    if cfg.get("enabled", True):
-        threshold = float(cfg.get("threshold", _ANCHOR_DISTANCE_THRESHOLD))
-        rewards["input_consistency"] = compute_input_consistency_reward(
-            parsed, metadata, threshold=threshold,
-        )
-
+    for name in REWARD_NAMES:
+        cfg = reward_cfg.get(name, {})
+        if not cfg.get("enabled", True):
+            continue
+        errors = []
+        if name == "format":
+            value, errors = format_reward, format_errors
+        elif gate_failed:
+            value = 0.0
+        elif name == "count_total":
+            value = compute_count_total_reward(parsed, metadata)
+        elif name == "count_type":
+            value = compute_count_type_reward(parsed, metadata)
+        elif name == "orthogonality":
+            value, errors = compute_orthogonality_reward(parsed)
+        elif name == "no_overlap":
+            value, errors = compute_no_overlap_reward(parsed)
+        elif name == "room_in_outline":
+            value, errors = compute_room_in_outline_reward(parsed)
+        elif name == "coverage":
+            value = compute_coverage_reward(parsed, threshold=float(cfg.get("threshold", 0.774)))
+        elif name == "connectivity":
+            value = compute_connectivity_reward(parsed, metadata)
+        elif name == "spatial":
+            value = compute_spatial_reward(parsed, metadata)
+        else:
+            value, errors = compute_polygon_fidelity_reward(
+                parsed, metadata, tolerance=float(cfg.get("tolerance", 15.0)),
+            )
+        rewards[name] = value
+        if name in TOKEN_CREDIT_REWARDS and cfg.get("credit_assignment", False):
+            error_masks[name] = build_error_mask(len(token_ids), errors)
     return {
-        "rewards": rewards,
-        "error_masks": error_masks,
-        "hard_gate_pass": True,
-        "parsed": parsed,
+        "rewards": rewards, "error_masks": error_masks,
+        "hard_gate_pass": format_reward == 1.0, "parsed": parsed,
     }

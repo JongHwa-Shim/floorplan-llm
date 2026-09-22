@@ -96,6 +96,7 @@ def save_results(
 
     if output_cfg.save_json:
         _save_json(input_dir / "condition.json", raw_sample)
+        _save_json(input_dir / "token_ids.json", {"ids": condition_tokens})
 
     # 이미지 저장용 visualizer: save_image=true이면 입력/출력 모두 사용하므로 한 번만 생성
     # Mod Record (2026-05-15): output.draw_labels 옵션을 visualizer 에 전달 — 추론 결과
@@ -125,6 +126,8 @@ def save_results(
 
         if output_cfg.save_json and parsed_floorplan is not None:
             _save_json(out_dir / "floorplan.json", parsed_floorplan)
+        if output_cfg.save_json:
+            _save_json(out_dir / "token_ids.json", {"ids": generated_ids})
 
         if visualizer is not None and parsed_floorplan is not None:
             try:

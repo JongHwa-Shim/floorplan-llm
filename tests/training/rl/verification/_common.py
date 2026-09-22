@@ -288,12 +288,9 @@ def flat_coords(pairs: list[tuple[int, int]]) -> list[int]:
 # Reward config 빌더
 # ---------------------------------------------------------------------------
 
-ALL_REWARD_NAMES = [
-    "format", "count_total", "count_type",
-    "orthogonality", "no_overlap",
-    "room_in_outline", "outline_in_room", "coverage",
-    "connectivity", "spatial", "input_consistency",
-]
+from src.training.rl.rewards import REWARD_NAMES
+
+ALL_REWARD_NAMES = list(REWARD_NAMES)
 
 
 def make_reward_cfg(
@@ -346,8 +343,8 @@ def make_reward_cfg(
             "faulty_attenuation": float(faulty_attenuation.get(name, 0.0)),
             "penalty_offset": float(penalty_offset.get(name, 0.0)),
         }
-        if name == "input_consistency" and threshold is not None:
-            item["threshold"] = float(threshold)
+        if name == "polygon_fidelity" and threshold is not None:
+            item["tolerance"] = float(threshold)
         cfg_dict[name] = item
 
     cfg_dict["format"]["hard_gate"] = bool(hard_gate)

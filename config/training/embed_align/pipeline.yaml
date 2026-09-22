@@ -26,7 +26,7 @@ data:
 
 distributed:
   # 사용할 GPU 수. 1이면 단일 GPU 모드, 2 이상이면 torchrun DDP로 자동 전환
-  nproc_per_node: 1
+  nproc_per_node: 4
 
 resume:
   enabled: false
@@ -38,9 +38,9 @@ resume:
 
 training:
   num_train_epochs: 5
-  per_device_train_batch_size: 2
+  per_device_train_batch_size: 32
   per_device_eval_batch_size: 4
-  # 실효 배치 = per_device * gradient_accumulation_steps
+  # 실효 배치: GPU 4대 × 장치당 32 × 누적 1 = 128
   gradient_accumulation_steps: 1
   # Embedding Alignment는 새 토큰 embedding 워밍업이므로 공격적인 LR 사용
   learning_rate: 5.0e-4

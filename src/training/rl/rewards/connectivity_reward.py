@@ -52,7 +52,7 @@ def compute_connectivity_reward(
             - rooms (list[dict]): visible 방 정보 (자유 방은 type 또는 coords 마스킹).
 
     Returns:
-        [0, 1] 범위. DOOR 조건 충족 비율.
+        모든 지정 문 연결이 충족되면 1.0, 하나라도 미충족이면 0.0.
     """
     if not parsed.success or not parsed.rooms:
         return 0.0
@@ -76,7 +76,7 @@ def compute_connectivity_reward(
     total_with_door = 0
 
     for edge in edges:
-        if not edge.get("door"):
+        if not edge.get("has_door", bool(edge.get("door"))):
             continue  # 문 없는 엣지는 건너뜀
 
         pair = edge.get("pair", [])
@@ -99,7 +99,7 @@ def compute_connectivity_reward(
     if total_with_door == 0:
         return 1.0
 
-    return satisfied / total_with_door
+    return float(satisfied == total_with_door)
 
 
 def _exists_door_pair(

@@ -5,7 +5,7 @@
 #   ✓ 방 종류 (type)
 #   ✓ 방 인접관계 (edges, 단 door 좌표 drop)
 #   ✓ 방 카운트 (room_summary)
-#   ✓ spatial 8 방위 관계 (HD 는 안 받지만 ours 학습 protocol 상 포함)
+#   ✗ spatial 8 방위 관계 (비교 입력에서 제외)
 #   ✗ 방 좌표 (drop_coords: 1.0)
 #   ✗ door 좌표 (drop_door: 1.0)
 #   ✗ front_door 정보 (drop_front_door: 1.0)
@@ -41,7 +41,7 @@ drop:
   p_drop_edge: 0.0            # 인접관계 유지
   p_drop_pair: 0.0
   p_drop_door: 1.0            # door 좌표 drop (HD bubble 에는 door 좌표 없음)
-  p_drop_spatial: 0.0         # spatial 유지 (ours 학습 protocol)
+  p_drop_spatial: 1.0         # 비교 입력은 연결·개수만 사용
   p_drop_front_door: 1.0      # front_door 전체 drop
   p_drop_front_door_coords: 1.0
 

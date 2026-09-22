@@ -3,7 +3,7 @@
 공간 관계(8방위 방향) 조건 충족도를 측정하는 보상.
 
 두 방의 무게중심 벡터를 8방위 각도로 분류하고,
-입력 조건의 SP(Spatial Relation) 방향과 일치하는 비율을 반환한다.
+모든 입력 SP(Spatial Relation) 방향과 일치하는지 이진값을 반환한다.
 
 헝가리안 매칭은 connectivity_reward와 동일한 함수를 재사용한다.
 신용할당: 없음 (sequence-level 보상).
@@ -55,7 +55,7 @@ def compute_spatial_reward(
             - rooms (list[dict]): visible 방 정보 (자유 방은 type 또는 coords 마스킹).
 
     Returns:
-        [0, 1] 범위. 방향 조건 충족 비율.
+        모든 방향 조건을 충족하면 1.0, 하나라도 다르면 0.0.
     """
     if not parsed.success or not parsed.rooms:
         return 0.0
@@ -107,7 +107,7 @@ def compute_spatial_reward(
     if total == 0:
         return 1.0
 
-    return satisfied / total
+    return float(satisfied == total)
 
 
 def _exists_direction_pair(
