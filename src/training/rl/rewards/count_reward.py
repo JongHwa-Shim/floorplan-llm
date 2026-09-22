@@ -7,8 +7,7 @@ R_count_total:
     신용할당: 없음 (sequence-level 보상).
 
 R_count_type:
-    타입별 방 개수 정확도의 평균.
-    각 타입에 대해 min(출력수, 조건수) / max(출력수, 조건수) 비율로 계산.
+    지정된 모든 타입별 방 개수의 일치 여부.
     신용할당: 없음 (sequence-level 보상).
 """
 
@@ -58,7 +57,7 @@ def compute_count_type_reward(
     parsed: "ParsedFloorplan",
     metadata: dict,
 ) -> float:
-    """타입별 방 개수 정확도 평균을 반환한다.
+    """지정된 모든 타입별 방 개수가 맞을 때만 1을 반환한다.
 
     Mod Record: metadata.type_counts는 모델 시점으로 재구성되어 ROOM_SUMMARY에서
     drop된 타입은 키에서 제외된다. 따라서 expected_counts에 없는 타입은 모델이 못 본
@@ -71,7 +70,7 @@ def compute_count_type_reward(
             - type_counts (dict[str, int]): ROOM_SUMMARY에 노출된 타입별 방 개수.
 
     Returns:
-        [0, 1] 범위. 노출된 타입 정확도 평균. 노출 타입이 없으면 만점.
+        모든 노출 타입의 개수가 맞으면 1.0, 하나라도 다르면 0.0. 조건이 없으면 1.0.
     """
     if not parsed.success or not parsed.rooms:
         return 0.0
@@ -87,20 +86,6 @@ def compute_count_type_reward(
             continue
         actual_counts[room.room_type] = actual_counts.get(room.room_type, 0) + 1
 
-    # 노출된 타입에 대해서만 정확도 계산 (drop된 타입은 채점 대상 아님)
-    scores: list[float] = []
-    for t, exp in expected_counts.items():
-        act = actual_counts.get(t, 0)
-
-        if exp == 0 and act == 0:
-            continue
-        max_val = max(exp, act)
-        if max_val == 0:
-            continue
-
-        scores.append(min(exp, act) / max_val)
-
-    if not scores:
-        return 1.0
-
-    return sum(scores) / len(scores)
+    # 생략된 종류는 채점하지 않고, 명시된 0개 조건도 엄격히 검사한다.
+    return float(all(actual_counts.get(room_type, 0) == count
+                     for room_type, count in expected_counts.items()))

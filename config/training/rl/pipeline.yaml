@@ -52,7 +52,7 @@ data:
 
 distributed:
   # 사용할 GPU 수. 1이면 단일 GPU 모드, 2 이상이면 torchrun DDP로 자동 전환
-  nproc_per_node: 2
+  nproc_per_node: 4
 
 resume:
   enabled: false
@@ -66,8 +66,8 @@ training:
   output_dir: "data/models/${model.name}/checkpoints/rl/${training.run_name}"
   dataloader_num_workers: 4
   num_train_epochs: 1
-  per_device_train_batch_size: 4
-  gradient_accumulation_steps: 4
+  per_device_train_batch_size: 8
+  gradient_accumulation_steps: 4      # 실효 배치: GPU 4대 × 장치당 8 × 누적 4 = 128
   learning_rate: 2e-5
   lr_scheduler_type: "constant_with_warmup"
   warmup_ratio: 0.05
@@ -78,7 +78,7 @@ training:
   save_steps: 1000
   report_to: "wandb"
   project_name: "floorplan-llm"
-  run_name: "260706_rl-max-step-100000"
+  run_name: "260706_rl-paper-aligned-50000"
   seed: 42
   # 체크포인트 최대 보존 수 (null = 제한 없이 전체 보존)
   save_total_limit: null
@@ -92,12 +92,12 @@ training:
   # 할당하는 adamw_torch로 두면 managed 경로 실패가 사라진다. (paged가 유리한 건 optimizer
   # state가 큰 경우인데 RL은 해당 없음.) 메모리가 더 빠듯하면 num_generations/batch를 줄인다.
   optim: "adamw_torch"
-  max_steps: 100000                          # 0 = 전체 epoch 기반
+  max_steps: 50000                          # 0 = 전체 epoch 기반
 
 # RL 생성 설정 (vLLM 포함)
 rl:
   num_generations: 16                    # 프롬프트당 생성 개수 (G)
-  temperature: 1
+  temperature: 0.7
   top_p: 0.95
   kl_coeff: 0.05                        # KL 페널티 계수 (beta)
   clip_range: 0.2                       # PPO 클리핑 엡실론
@@ -143,73 +143,65 @@ rewards:
 
   count_total:
     enabled: true
-    weight: 1.0
+    weight: 0.5
     credit_assignment: false
 
   count_type:
     enabled: true
-    weight: 0.5
+    weight: 1.0
     credit_assignment: false
 
   orthogonality:
     enabled: true
-    weight: 0.5
+    weight: 1.5
     credit_assignment: true
-    nominal_gain: 0.2
-    faulty_attenuation: 0.5
-    penalty_offset: 1.0
+    nominal_gain: 0.3
+    faulty_attenuation: 0.7
+    penalty_offset: 1.5
 
   no_overlap:
     enabled: true
-    weight: 0.5
+    weight: 2.0
     credit_assignment: true
     nominal_gain: 0.3
-    faulty_attenuation: 0.6
+    faulty_attenuation: 0.7
     penalty_offset: 1.5
 
   room_in_outline:
     enabled: true
     weight: 1.5
     credit_assignment: true
-    nominal_gain: 0.2
-    faulty_attenuation: 0.5
-    penalty_offset: 1.0
+    nominal_gain: 0.3
+    faulty_attenuation: 0.7
+    penalty_offset: 1.5
 
-  # outline 꼭짓점이 방 내부에 포함되는지 (room_in_outline 케이스 B 검출)
-  # 방 꼭짓점은 모두 outline 안에 있으나 방 edge가 outline 오목부를 가로지를 때 발생
-  outline_in_room:
-    enabled: true
-    weight: 0.3
-    credit_assignment: true
-    nominal_gain: 0.2
-    faulty_attenuation: 0.5
-    penalty_offset: 1.0
-
-  # outline 내 빈공간 비율 보수값 (room_in_outline의 쌍대)
+  # 외곽선 내부 방 합집합의 피복 비율이 임계값 이상인지 이진 판정
   # 신용할당 OFF: 빈공간 책임 소재 모호 + 입력 좌표 노이즈로 토큰 단위 시그널 부정확
   coverage:
     enabled: true
-    weight: 3.0
+    weight: 1.5
+    threshold: 0.774
     credit_assignment: false
 
   connectivity:
     enabled: true
-    weight: 0.5
+    weight: 1.0
     credit_assignment: false
 
   spatial:
     enabled: true
-    weight: 3.0
+    weight: 0.5
     credit_assignment: false
 
-  # 입력 프롬프트의 좌표 명시 방(앵커+drop_type)이 출력에 일관되게 포함되는지 검증
-  # threshold: 무게중심 거리 임계값(px). 노이즈 3σ=9px + 모델 오차 마진. transform 증강은
-  # 입력/출력 좌표에 동일 적용되므로 상대 오차 없음.
-  input_consistency:
+  # Hungarian 방 매칭 후 모든 입력 꼭짓점의 거리 허용치 검사
+  polygon_fidelity:
     enabled: true
     weight: 1.5
-    credit_assignment: false
-    threshold: 15.0
+    credit_assignment: true
+    nominal_gain: 0.3
+    faulty_attenuation: 0.7
+    penalty_offset: 1.5
+    tolerance: 15.0
 
 # GDPO + 토큰 신용할당 어드밴티지 계산 설정
 advantage:

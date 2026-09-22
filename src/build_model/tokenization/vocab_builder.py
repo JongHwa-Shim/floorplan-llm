@@ -43,6 +43,7 @@ def build_vocab(
 
     Raises:
         FileNotFoundError: merge_config_path가 존재하지 않을 때.
+        ValueError: 출력 경로에 다른 토큰 집합의 기존 어휘가 있을 때.
     """
     output_dir = Path(output_dir)
     # vocab_extension.json과 tokenizer 파일 모두 tokenizer/ 디렉토리에 저장
@@ -67,6 +68,18 @@ def build_vocab(
     )
     all_tokens = flatten_token_list(categories)
     logger.info("추가 예정 커스텀 토큰 수: %d", len(all_tokens))
+
+    # Mod Record: 미사용 DOOR_H/V를 제외한 신규 어휘로 기존 체크포인트의 ID를
+    # 덮어쓰면 embedding 행이 다른 의미가 된다. 다른 출력 경로에서 새로 빌드한다.
+    existing_extension = output_dir / "vocab_extension.json"
+    if existing_extension.exists():
+        with existing_extension.open(encoding="utf-8") as stream:
+            saved_tokens = json.load(stream).get("token_to_id", {})
+        if set(saved_tokens) != set(all_tokens):
+            raise ValueError(
+                "기존 어휘와 신규 어휘가 다릅니다. 체크포인트의 토큰 ID를 보존하려면 "
+                "output.dir을 새 경로로 지정하고 새 학습에 해당 토크나이저를 사용하세요."
+            )
 
     # 3. 기존 tokenizer와 중복 토큰 확인 (이미 존재하는 토큰은 제외)
     existing_vocab = tokenizer.get_vocab()

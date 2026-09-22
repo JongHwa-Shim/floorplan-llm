@@ -120,6 +120,11 @@ experiments/
 # scripts/ 하위 산출물/유틸 폴더 (git 추적 제외)
 # =============================================================================
 scripts/figures/
-scripts/metrics/
-scripts/tables/
+scripts/metrics/*
+!scripts/metrics/_common.py
+!scripts/metrics/compute_novel_metrics.py
+scripts/tables/*
+!scripts/tables/build_ablation_table.py
+!scripts/tables/build_table_2_robustness.py
+!scripts/tables/build_table_3_geometric.py
 scripts/user_study/

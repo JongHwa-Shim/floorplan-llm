@@ -18,8 +18,8 @@ validation:
 # train/validation/test split 설정
 split:
   enabled: true      # true이면 DatasetDict로 저장, false이면 단일 Dataset으로 저장
-  val_ratio: 0.001   # validation 비율
-  test_ratio: 0.005  # test 비율
+  val_size: 1000     # 원본 평면도 단위 validation 개수
+  test_size: 1000    # 원본 평면도 단위 test 개수
   seed: 42
 
 # 실행 모드

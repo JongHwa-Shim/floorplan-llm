@@ -1,181 +1,92 @@
-"""R_orthogonality + R_no_overlap 보상함수 모듈.
-
-직각도 및 방 겹침 여부를 평가하는 기하학 기반 보상.
-
-R_orthogonality:
-    각 방 폴리곤의 꼭짓점이 직각(내적 ≈ 0)인 비율.
-    비직각 꼭짓점의 좌표 토큰을 오류로 표시 (신용할당).
-
-R_no_overlap:
-    전체 방 면적 대비 겹치는 면적 비율.
-    상대 방 폴리곤 내부에 실제로 포함된 꼭짓점(침범 꼭짓점)만 오류로 표시 (신용할당).
-    공유 경계선 위 꼭짓점은 오탐 방지를 위해 제외.
-
-의존성: shapely>=2.0.0
-"""
+"""전체 꼭짓점 직교성과 비외곽선 방 사이의 내부 겹침을 평가한다."""
 
 from __future__ import annotations
 
-import logging
 import math
 from typing import TYPE_CHECKING
 
+from shapely.geometry import Point, Polygon
+
 if TYPE_CHECKING:
-    from src.training.rl.rewards.parser import ParsedFloorplan, ParsedRoom
+    from src.training.rl.rewards.parser import ParsedFloorplan
 
-logger = logging.getLogger(__name__)
-
-# 직각 판정 허용 오차 (정수 좌표 기반)
 _ORTHOGONALITY_TOL = 1e-3
 
 
-def compute_orthogonality_reward(
-    parsed: "ParsedFloorplan",
-) -> tuple[float, list[int]]:
-    """각 방 꼭짓점의 직각도 비율을 반환한다.
-
-    각 꼭짓점에서 인접 두 변의 벡터 내적이 0에 가까우면 직각으로 판정한다.
-    outline 포함 모든 방을 평가한다.
+def compute_orthogonality_reward(parsed: "ParsedFloorplan") -> tuple[float, list[int]]:
+    """외곽선을 포함한 모든 꼭짓점이 직각일 때만 1을 반환한다.
 
     Args:
-        parsed: parse_output_tokens()의 반환값.
+        parsed: 파싱된 생성 평면도.
 
     Returns:
-        tuple:
-            - reward: [0, 1] 범위. 전체 꼭짓점 중 직각 비율.
-            - error_indices: 비직각 꼭짓점의 X 토큰 인덱스 리스트.
+        이진 보상과 직각이 아닌 꼭짓점의 X/Y 토큰 인덱스.
+
+    Raises:
+        없음.
     """
     if not parsed.success or not parsed.rooms:
         return 0.0, []
-
-    total_vertices = 0
-    right_angle_count = 0
-    error_indices: list[int] = []
-
+    satisfied = True
+    errors = []
     for room in parsed.rooms:
-        if len(room.coords) < 3:
+        count = len(room.coords)
+        if count < 3:
+            satisfied = False
             continue
-
-        n = len(room.coords)
-        for i in range(n):
-            # 현재 꼭짓점과 전후 꼭짓점
-            prev_v = room.coords[(i - 1) % n]
-            curr_v = room.coords[i]
-            next_v = room.coords[(i + 1) % n]
-
-            # 두 인접 벡터
-            v1 = (prev_v[0] - curr_v[0], prev_v[1] - curr_v[1])
-            v2 = (next_v[0] - curr_v[0], next_v[1] - curr_v[1])
-
-            # 영벡터 방어
-            len1 = math.sqrt(v1[0] ** 2 + v1[1] ** 2)
-            len2 = math.sqrt(v2[0] ** 2 + v2[1] ** 2)
-            if len1 < 1e-9 or len2 < 1e-9:
-                continue
-
-            # 정규화 후 내적 계산 (직각이면 0)
-            dot = (v1[0] * v2[0] + v1[1] * v2[1]) / (len1 * len2)
-            total_vertices += 1
-
-            if abs(dot) <= _ORTHOGONALITY_TOL:
-                right_angle_count += 1
-            else:
-                # 비직각: 현재 꼭짓점(i)의 X 토큰 인덱스를 오류로 기록
+        for i, current in enumerate(room.coords):
+            previous, following = room.coords[(i - 1) % count], room.coords[(i + 1) % count]
+            ax, ay = previous[0] - current[0], previous[1] - current[1]
+            bx, by = following[0] - current[0], following[1] - current[1]
+            length_product = math.hypot(ax, ay) * math.hypot(bx, by)
+            # 길이 0인 변도 직각을 이루지 못하므로 실패시킨다.
+            if length_product == 0 or abs(ax * bx + ay * by) > _ORTHOGONALITY_TOL * length_product:
+                satisfied = False
                 if i < len(room.coord_token_indices):
-                    error_indices.append(room.coord_token_indices[i])
-                    error_indices.append(room.coord_token_indices[i] + 1)  # Y 토큰
-
-    if total_vertices == 0:
-        return 0.0, []
-
-    reward = right_angle_count / total_vertices
-    return reward, error_indices
+                    errors.extend((room.coord_token_indices[i], room.coord_token_indices[i] + 1))
+    return float(satisfied), sorted(set(errors))
 
 
-def compute_no_overlap_reward(
-    parsed: "ParsedFloorplan",
-) -> tuple[float, list[int]]:
-    """방 간 겹침 면적 비율 기반 보상을 반환한다.
+def compute_no_overlap_reward(parsed: "ParsedFloorplan") -> tuple[float, list[int]]:
+    """모든 비외곽선 방 쌍의 내부 겹침이 없을 때만 1을 반환한다.
 
-    outline을 제외한 방들 사이에 shapely Polygon intersection으로 겹침 면적을 계산한다.
-    각 방의 꼭짓점이 상대 방 폴리곤 내부에 실제로 포함되는지 검사하여 책임 꼭짓점만 오류로 마킹한다.
+    Mod Record: 면적 비율 대신 이진 판정을 사용한다. 경계 공유는 허용하며,
+    다른 방 내부에 있는 꼭짓점만 마스킹하는 기존 책임 범위를 유지한다.
 
     Args:
-        parsed: parse_output_tokens()의 반환값.
+        parsed: 파싱된 생성 평면도.
 
     Returns:
-        tuple:
-            - reward: [0, 1] 범위. 1.0이면 겹침 없음.
-            - error_indices: 겹침 관련 오류 토큰 인덱스 리스트.
+        이진 보상과 다른 방 내부에 있는 꼭짓점의 X/Y 토큰 인덱스.
+
+    Raises:
+        없음. 유효하지 않은 폴리곤은 실패로 처리한다.
     """
     if not parsed.success:
         return 0.0, []
-
-    try:
-        from shapely.geometry import Polygon
-    except ImportError:
-        logger.warning("shapely 미설치. no_overlap 보상 계산 불가.")
-        return 1.0, []
-
-    # outline 제외 방들의 Polygon 생성
-    non_outline_rooms = [r for r in parsed.rooms if r.room_type != "outline"]
-    if len(non_outline_rooms) < 2:
-        return 1.0, []
-
-    # shapely Polygon 리스트 생성 (3개 이상의 유효한 꼭짓점 필요)
-    polys: list[Polygon | None] = []
-    for room in non_outline_rooms:
-        if len(room.coords) >= 3:
-            try:
-                poly = Polygon(room.coords)
-                polys.append(poly if poly.is_valid and poly.area > 0 else None)
-            except Exception:
-                polys.append(None)
-        else:
-            polys.append(None)
-
-    total_area = sum(p.area for p in polys if p is not None)
-    if total_area <= 0:
-        return 1.0, []
-
-    overlap_area = 0.0
-    error_indices: list[int] = []
-
-    # 모든 방 쌍에 대해 겹침 계산
-    n = len(non_outline_rooms)
-    for i in range(n):
-        for j in range(i + 1, n):
-            if polys[i] is None or polys[j] is None:
+    rooms = [room for room in parsed.rooms if room.room_type != "outline"]
+    polygons = []
+    satisfied = True
+    for room in rooms:
+        try:
+            polygon = Polygon(room.coords)
+            valid = polygon.is_valid and polygon.area > 0
+        except (ValueError, TypeError):
+            valid = False
+        polygons.append(polygon if valid else None)
+        satisfied = satisfied and valid
+    errors = []
+    for i, first in enumerate(polygons):
+        if first is None:
+            continue
+        for j in range(i + 1, len(polygons)):
+            second = polygons[j]
+            if second is None or first.intersection(second).area <= 0:
                 continue
-            try:
-                intersection = polys[i].intersection(polys[j])
-            except Exception:
-                continue
-
-            if intersection.is_empty or intersection.area <= 0:
-                continue
-
-            overlap_area += intersection.area
-
-            # 책임 꼭짓점 마킹: 각 방의 꼭짓점 중 상대 방 폴리곤 내부에 있는 것만 오류로 마킹
-            # - 방 i의 꼭짓점이 polys[j] 내부에 있으면 방 i에게 책임
-            # - 방 j의 꼭짓점이 polys[i] 내부에 있으면 방 j에게 책임
-            # contains()는 경계선 위 꼭짓점(공유 벽)은 제외하여 오탐 방지
-            try:
-                from shapely.geometry import Point as ShapelyPoint
-                for room_idx, other_poly in ((i, polys[j]), (j, polys[i])):
-                    room = non_outline_rooms[room_idx]
-                    for coord_idx, coord in enumerate(room.coords):
-                        if other_poly.contains(ShapelyPoint(coord)):
-                            if coord_idx < len(room.coord_token_indices):
-                                tok_idx = room.coord_token_indices[coord_idx]
-                                error_indices.append(tok_idx)
-                                error_indices.append(tok_idx + 1)  # Y 토큰
-            except Exception:
-                pass
-
-    # 겹침 비율로 보상 계산
-    overlap_ratio = min(overlap_area / total_area, 1.0)
-    reward = 1.0 - overlap_ratio
-
-    return reward, sorted(set(error_indices))
+            satisfied = False
+            for room, other in ((rooms[i], second), (rooms[j], first)):
+                for vertex, coord in enumerate(room.coords):
+                    if vertex < len(room.coord_token_indices) and other.contains(Point(coord)):
+                        index = room.coord_token_indices[vertex]
+                        errors.extend((index, index + 1))
+    return float(satisfied), sorted(set(errors))

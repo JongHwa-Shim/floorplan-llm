@@ -8,8 +8,8 @@ Usage:
     # 전체 배치 변환 (split 포함, 기본값)
     uv run python scripts/build_dataset/json2arrow/run_conversion.py
 
-    # split 비율 오버라이드
-    uv run python scripts/build_dataset/json2arrow/run_conversion.py split.val_ratio=0.05 split.test_ratio=0.1
+    # split 개수 오버라이드
+    uv run python scripts/build_dataset/json2arrow/run_conversion.py split.val_size=1000 split.test_size=1000
 
     # split 비활성화 (단일 Dataset으로 저장)
     uv run python scripts/build_dataset/json2arrow/run_conversion.py split.enabled=false
@@ -50,36 +50,41 @@ log = logging.getLogger(__name__)
 def split_and_save(
     dataset: datasets.Dataset,
     output_dir: str,
-    val_ratio: float,
-    test_ratio: float,
+    val_size: int,
+    test_size: int,
     seed: int,
 ) -> datasets.DatasetDict:
     """Dataset을 train/validation/test로 분할하여 DatasetDict로 저장.
 
     분할 순서: 전체 → test 분리 → 나머지에서 validation 분리 → 나머지가 train.
-    이 순서 덕분에 test 비율이 전체 기준으로 정확하게 유지된다.
+    이 순서 덕분에 검증·시험 개수가 전체 크기에 관계없이 정확하게 유지된다.
 
     Args:
         dataset: 분할할 전체 Dataset.
         output_dir: DatasetDict 저장 경로.
-        val_ratio: validation 비율 (전체 대비).
-        test_ratio: test 비율 (전체 대비).
+        val_size: validation 원본 평면도 개수.
+        test_size: test 원본 평면도 개수.
         seed: 셔플 시드 (재현성 보장).
 
     Returns:
         datasets.DatasetDict: train/validation/test split이 완료된 DatasetDict.
+
+    Raises:
+        ValueError: 분할 개수가 양의 정수가 아니거나 훈련 데이터가 남지 않을 때.
     """
     total = len(dataset)
+    if any(type(size) is not int or size <= 0 for size in (val_size, test_size)):
+        raise ValueError("val_size와 test_size는 양의 정수여야 합니다.")
+    if val_size + test_size >= total:
+        raise ValueError("검증·시험 분할 후 훈련 평면도가 하나 이상 남아야 합니다.")
 
     # 전체에서 test 분리
-    split1 = dataset.train_test_split(test_size=test_ratio, seed=seed)
+    split1 = dataset.train_test_split(test_size=test_size, seed=seed)
     test_ds = split1["test"]
     remainder = split1["train"]
 
     # 나머지에서 validation 분리
-    # remainder 기준 val 비율 = val_ratio / (1 - test_ratio)
-    val_ratio_in_remainder = val_ratio / (1.0 - test_ratio)
-    split2 = remainder.train_test_split(test_size=val_ratio_in_remainder, seed=seed)
+    split2 = remainder.train_test_split(test_size=val_size, seed=seed)
     train_ds = split2["train"]
     val_ds = split2["test"]
 
@@ -174,16 +179,16 @@ def main(cfg: DictConfig) -> None:
     # split 적용
     if cfg.split.enabled:
         log.info(
-            "Split 적용 중 (val=%.3f, test=%.3f, seed=%d)...",
-            cfg.split.val_ratio,
-            cfg.split.test_ratio,
+            "Split 적용 중 (val=%d, test=%d, seed=%d)...",
+            cfg.split.val_size,
+            cfg.split.test_size,
             cfg.split.seed,
         )
         split_and_save(
             dataset=dataset,
             output_dir=output_dir,
-            val_ratio=cfg.split.val_ratio,
-            test_ratio=cfg.split.test_ratio,
+            val_size=cfg.split.val_size,
+            test_size=cfg.split.test_size,
             seed=cfg.split.seed,
         )
     else:

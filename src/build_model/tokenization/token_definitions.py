@@ -2,7 +2,7 @@
 
 평면도 생성 LLM에 추가할 커스텀 토큰을 카테고리별로 정의한다.
 토큰 순서는 재현성 보장을 위해 고정한다.
-BOS/EOS/PAD는 기존 LLM 토큰을 재활용하므로 목록에서 제외한다.
+BOS/EOS는 기존 토큰을 재활용한다. 평면도 어휘 564개와 패딩 토큰 1개를 등록한다.
 """
 
 import json
@@ -121,9 +121,6 @@ def build_token_list(
         "<NO_DOOR>",
         # 현관문 (<DOOR>/<END_DOOR> 재활용, <NO_FRONT_DOOR> 삭제됨)
         "<FRONT_DOOR>",
-        # 문 방향 (더 이상 토크나이징에 사용하지 않으나 vocab 호환성 유지)
-        "<DOOR_H>",
-        "<DOOR_V>",
         # 공간 관계 블록 (<SPATIAL>/<END_SPATIAL> 제거 — 개별 <SP>로만 구분)
         "<SP>",      # 개별 spatial 관계 항목 시작
         "<END_SP>",  # 개별 spatial 관계 항목 끝

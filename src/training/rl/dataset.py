@@ -200,7 +200,10 @@ def _extract_metadata(augmented_sample: dict, drop_state: Any) -> dict:
         rooms_visible.append({
             "rid":    rid,
             "type":   "" if rid in drop_type_rids else room.get("type", ""),
-            "coords": [] if rid in drop_coords_rids else list(room.get("coords", [])),
+            # 입력에 노출된 잡음 좌표를 평가한다. 정답의 깨끗한 좌표를 사용하지 않는다.
+            "coords": [] if rid in drop_coords_rids else list(
+                drop_state.noise_room_coords.get(rid, room.get("coords", []))
+            ),
         })
 
     # --- ROOM_SUMMARY: total / type별 개수 ---
@@ -227,6 +230,8 @@ def _extract_metadata(augmented_sample: dict, drop_state: Any) -> dict:
         new_edge = {
             "pair":  list(edge.get("pair", [])),
             "door":  list(edge.get("door", [])),
+            # 문 기하를 생략해도 연결 유무는 입력의 DOOR/NO_DOOR로 구별된다.
+            "has_door": bool(edge.get("door")),
         }
 
         # drop_pair: edge의 RID 쌍 일부/전체 마스킹
