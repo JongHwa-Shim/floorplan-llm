@@ -135,7 +135,7 @@ rewards:
   format:
     enabled: true
     weight: 1.0
-    hard_gate: true                     # R_format=0이면 모든 보상=0
+    hard_gate: true                     # 훈련에서만 R_format=0이면 모든 보상=0
     credit_assignment: true
     nominal_gain: 0.3
     faulty_attenuation: 0.7

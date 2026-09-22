@@ -56,8 +56,12 @@ def compute_spatial_reward(
 
     Returns:
         모든 방향 조건을 충족하면 1.0, 하나라도 다르면 0.0.
+
+    Raises:
+        없음.
     """
-    if not parsed.success or not parsed.rooms:
+    # Mod Record: 형식 오류와 독립적으로 복원된 방의 공간 관계를 평가한다.
+    if not parsed.rooms:
         return 0.0
 
     spatial_conditions = metadata.get("spatial", [])
