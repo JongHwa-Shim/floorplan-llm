@@ -7,8 +7,9 @@
 
 알고리즘:
     1. 같은 타입 내에서 무게중심 거리 기반 scipy.optimize.linear_sum_assignment 수행
-    2. 매핑된 방 쌍에 대해 EDGE 조건의 DOOR 존재 여부 기하학적 확인
-       - DOOR 중심점이 두 방의 경계 근방에 위치하면 연결로 판정
+    2. 확장된 문 사각형과 겹침 면적이 가장 큰 두 출력 방을 문마다 선택
+       - 두 면적의 작은 값/큰 값 비율이 기준 이상이면 연결 쌍으로 등록
+    3. 입력 EDGE의 후보 방 쌍이 등록된 연결에 포함되는지 확인
 
 의존성: scipy>=1.14.0
 """
@@ -19,13 +20,13 @@ import logging
 import math
 from typing import TYPE_CHECKING
 
+from shapely.errors import GEOSException
+from shapely.geometry import Polygon, box
+
 if TYPE_CHECKING:
-    from src.training.rl.rewards.parser import ParsedFloorplan, ParsedRoom
+    from src.training.rl.rewards.parser import ParsedDoor, ParsedFloorplan, ParsedRoom
 
 logger = logging.getLogger(__name__)
-
-# DOOR가 두 방 경계에 존재하는지 판정하는 거리 허용 오차 (좌표 단위)
-_DOOR_PROXIMITY_THRESHOLD = 20.0
 
 # drop_type 방(좌표만 visible)을 출력 방에 매칭할 때 무게중심 거리 임계값
 # 좌표 노이즈 σ=3px + 모델 생성 오차 + 변형 증강 후 잔차를 고려한 보수적 값.
@@ -35,6 +36,9 @@ _FREE_ROOM_COORD_THRESHOLD = 30.0
 def compute_connectivity_reward(
     parsed: "ParsedFloorplan",
     metadata: dict,
+    *,
+    door_expansion: float = 2.0,
+    min_overlap_balance: float = 0.15,
 ) -> float:
     """연결성(방 간 문 존재) 보상을 계산한다.
 
@@ -43,6 +47,9 @@ def compute_connectivity_reward(
     /drop_type 방(자유 방)은 매칭 모호하므로 직접 매칭하지 않고, 제약 검사 시점에
     후보 출력 방 집합으로 확장한 뒤 어떤 (a, b) 쌍에서든 제약이 만족되면 통과로
     채점한다(satisfiability-based 채점).
+    Mod Record: 중심점의 20px 경계 근접 검사를 문 영역의 겹침 면적으로 교체한다.
+    전처리의 5×5 확장에 대응하는 사방 2px 확장과 면적 균형 기준을 사용한다.
+    모든 출력 방에 대해 문당 연결 쌍을 한 번 정하여 후보별 중복 배정을 방지한다.
 
     Args:
         parsed: parse_output_tokens()의 반환값.
@@ -50,12 +57,14 @@ def compute_connectivity_reward(
             - edges (list[dict]): visible 엣지 조건. 각 항목:
                 {pair: [rid_a, rid_b], door: list[{x,y,w,h}]}
             - rooms (list[dict]): visible 방 정보 (자유 방은 type 또는 coords 마스킹).
+        door_expansion: 문 사각형의 각 방향 확장 거리(px). 유한한 0 이상.
+        min_overlap_balance: 작은 겹침 면적/큰 겹침 면적의 최솟값. 0 이상 1 이하.
 
     Returns:
         모든 지정 문 연결이 충족되면 1.0, 하나라도 미충족이면 0.0.
 
     Raises:
-        없음.
+        ValueError: 문 확장 거리나 겹침 균형 기준이 유효 범위를 벗어날 때.
     """
     # Mod Record: 형식 오류와 독립적으로 복원된 방·문 연결을 평가한다.
     if not parsed.rooms:
@@ -73,6 +82,10 @@ def compute_connectivity_reward(
     if not non_outline:
         return 0.0
 
+    connected_pairs = _door_connected_pairs(
+        non_outline, parsed.doors, door_expansion=door_expansion,
+        min_overlap_balance=min_overlap_balance,
+    )
     input_rooms = metadata.get("rooms", [])
 
     # DOOR 존재 여부 검증
@@ -96,40 +109,15 @@ def compute_connectivity_reward(
         if not cands_a or not cands_b:
             continue
 
-        # 어떤 (a, b) 조합에서든 door가 두 방 경계에 존재하면 만족
-        if _exists_door_pair(cands_a, cands_b, non_outline, parsed.doors):
+        # 입력에서 식별 가능한 후보 중 실제 문 연결로 선택된 쌍이 있으면 만족한다.
+        if any((min(a, b), max(a, b)) in connected_pairs
+               for a in cands_a for b in cands_b if a != b):
             satisfied += 1
 
     if total_with_door == 0:
         return 1.0
 
     return float(satisfied == total_with_door)
-
-
-def _exists_door_pair(
-    cands_a: list[int],
-    cands_b: list[int],
-    output_rooms: list,
-    doors: list,
-) -> bool:
-    """후보 출력 방 인덱스 집합 두 개에서 door로 연결된 (a, b) 쌍이 존재하는지 확인한다.
-
-    Args:
-        cands_a: 첫 번째 RID의 후보 출력 방 인덱스 리스트.
-        cands_b: 두 번째 RID의 후보 출력 방 인덱스 리스트.
-        output_rooms: outline 제외 출력 방 리스트.
-        doors: parsed.doors.
-
-    Returns:
-        어떤 (a_idx, b_idx) 조합에서든 door가 존재하면 True.
-    """
-    for a_idx in cands_a:
-        for b_idx in cands_b:
-            if a_idx == b_idx:
-                continue
-            if _has_door_between(output_rooms[a_idx], output_rooms[b_idx], doors):
-                return True
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -319,66 +307,73 @@ def _compute_centroid_from_parsed(room: "ParsedRoom") -> tuple[float, float]:
     return (sum(xs) / len(xs), sum(ys) / len(ys))
 
 
-def _has_door_between(
-    room_a: "ParsedRoom",
-    room_b: "ParsedRoom",
-    doors: list,
-) -> bool:
-    """두 방 사이의 공유 경계 근방에 DOOR가 존재하는지 확인한다.
+def _door_connected_pairs(
+    output_rooms: list["ParsedRoom"],
+    doors: list["ParsedDoor"],
+    *,
+    door_expansion: float = 2.0,
+    min_overlap_balance: float = 0.15,
+) -> set[tuple[int, int]]:
+    """문 영역과 가장 많이 겹치는 두 방의 인덱스 쌍을 반환한다.
 
-    Mod Record: 이전 구현은 자체 작성한 `_min_distance_to_polygon`을 사용하여
-    door 중심점에서 폴리곤 경계까지의 최소 거리를 계산했으나, 점이 폴리곤 내부에
-    있어도 경계까지 거리만 반환하므로 door가 한 방 내부 깊숙이 있어도 dist가
-    작게 나와 통과되는 false positive가 있었다.
-    shapely `polygon.boundary.distance(point)`는 점이 내부에 있어도 경계까지의
-    양수 거리를 반환한다. 단, 내부 깊숙이 있을수록 boundary까지 거리가 크므로
-    threshold를 넘으면 자동으로 거른다. door는 "두 방의 공유 벽 근처"에 있어야
-    하므로 양쪽 방의 boundary 모두에 가까운 경우만 통과시킨다.
+    Mod Record: 전처리의 문 마스크 확장·상위 두 방 선택·면적 균형 원리를
+    연속 폴리곤 면적으로 적용한다. 래스터 변환 없이 방 폴리곤은 한 번만 만들고,
+    각 문을 전체 출력 방과 비교한다. 점·선 접촉은 면적 0이므로 제외한다.
+    같은 면적이면 출력 방 순서로 선택하며, 잘못된 기하를 자동 수리하지 않는다.
 
     Args:
-        room_a: 첫 번째 방.
-        room_b: 두 번째 방.
-        doors: ParsedDoor 리스트.
+        output_rooms: outline을 제외한 전체 출력 방 리스트.
+        doors: 파싱된 인테리어 문 리스트.
+        door_expansion: 문 사각형의 각 방향 확장 거리(px). 유한한 0 이상.
+        min_overlap_balance: 작은 겹침 면적/큰 겹침 면적의 최솟값. 0 이상 1 이하.
 
     Returns:
-        DOOR가 두 방의 공유 경계 근방에 위치하면 True.
+        오름차순 방 인덱스 쌍의 집합. 유효한 문 하나당 최대 한 쌍을 추가한다.
+
+    Raises:
+        ValueError: 문 확장 거리나 겹침 균형 기준이 유효 범위를 벗어날 때.
     """
-    if not doors or len(room_a.coords) < 3 or len(room_b.coords) < 3:
-        return False
+    if not math.isfinite(door_expansion) or door_expansion < 0:
+        raise ValueError("door_expansion은 유한한 0 이상의 값이어야 합니다.")
+    if not math.isfinite(min_overlap_balance) or not 0 <= min_overlap_balance <= 1:
+        raise ValueError("min_overlap_balance는 유한한 0 이상 1 이하의 값이어야 합니다.")
+    if not doors or len(output_rooms) < 2:
+        return set()
 
-    try:
-        from shapely.geometry import Point, Polygon
-    except ImportError:
-        logger.warning("shapely 미설치. door 위치 검증 불가.")
-        return False
-
-    try:
-        poly_a = Polygon(room_a.coords)
-        poly_b = Polygon(room_b.coords)
-        if not poly_a.is_valid:
-            poly_a = poly_a.buffer(0)
-        if not poly_b.is_valid:
-            poly_b = poly_b.buffer(0)
-        if poly_a.is_empty or poly_b.is_empty:
-            return False
-    except Exception:
-        return False
-
-    boundary_a = poly_a.boundary
-    boundary_b = poly_b.boundary
-
-    for door in doors:
-        if not door.is_valid:
+    polygons = []
+    for index, room in enumerate(output_rooms):
+        if len(room.coords) < 3 or not all(math.isfinite(v) for xy in room.coords for v in xy):
             continue
-        door_pt = Point(door.cx, door.cy)
-        # boundary.distance는 점이 폴리곤 내부에 있어도 경계까지의 양수 거리를 반환.
-        # door가 한 방 내부 깊숙이 있으면 그 방의 boundary 거리가 threshold를 초과하여 걸러진다.
         try:
-            dist_a = boundary_a.distance(door_pt)
-            dist_b = boundary_b.distance(door_pt)
-        except Exception:
+            polygon = Polygon(room.coords)
+        except (ValueError, TypeError, GEOSException):
             continue
-        if dist_a <= _DOOR_PROXIMITY_THRESHOLD and dist_b <= _DOOR_PROXIMITY_THRESHOLD:
-            return True
+        if polygon.is_valid and not polygon.is_empty and polygon.area > 0:
+            polygons.append((index, polygon))
 
-    return False
+    connected_pairs = set()
+    for door in doors:
+        if (not door.is_valid or not all(math.isfinite(v) for v in (door.cx, door.cy, door.w, door.h))
+                or door.w <= 0 or door.h <= 0):
+            continue
+        expanded_door = box(
+            door.cx - door.w / 2 - door_expansion,
+            door.cy - door.h / 2 - door_expansion,
+            door.cx + door.w / 2 + door_expansion,
+            door.cy + door.h / 2 + door_expansion,
+        )
+        overlaps = []
+        for index, polygon in polygons:
+            try:
+                area = polygon.intersection(expanded_door).area
+            except GEOSException:
+                continue
+            if area > 0:
+                overlaps.append((area, index))
+        if len(overlaps) < 2:
+            continue
+        overlaps.sort(key=lambda item: item[0], reverse=True)
+        (larger, first), (smaller, second) = overlaps[:2]
+        if smaller / larger >= min_overlap_balance:
+            connected_pairs.add((min(first, second), max(first, second)))
+    return connected_pairs

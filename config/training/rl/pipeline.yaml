@@ -187,6 +187,8 @@ rewards:
     enabled: true
     weight: 1.0
     credit_assignment: false
+    door_expansion: 2.0                 # 사방 확장(px), 전처리의 5×5 문 마스크 확장에 대응
+    min_overlap_balance: 0.15          # 상위 두 방의 작은 겹침 면적 / 큰 겹침 면적
 
   spatial:
     enabled: true

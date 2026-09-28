@@ -87,7 +87,11 @@ def compute_all_rewards(
         elif name == "coverage":
             value = compute_coverage_reward(parsed, threshold=float(cfg.get("threshold", 0.774)))
         elif name == "connectivity":
-            value = compute_connectivity_reward(parsed, metadata)
+            value = compute_connectivity_reward(
+                parsed, metadata,
+                door_expansion=float(cfg.get("door_expansion", 2.0)),
+                min_overlap_balance=float(cfg.get("min_overlap_balance", 0.15)),
+            )
         elif name == "spatial":
             value = compute_spatial_reward(parsed, metadata)
         else:
