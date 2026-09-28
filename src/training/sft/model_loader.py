@@ -90,7 +90,7 @@ def load_base_model_with_partial_state(
 
     # vocab 크기 확장: 커스텀 토큰을 수용하도록 embed_tokens / lm_head 행 추가
     # Mod Record: transformers 5.x에서 mean_resizing=True(기본값)가 기존 embedding matrix를
-    # GPU에 float32로 복사해 공분산 계산 → embed_tokens + lm_head 각각 ~2GB씩 임시 텐서 생성.
+    # GPU에 float32로 복사해 공분산을 계산하므로 임시 텐서가 필요하다.
     # 어차피 partial_state.pt로 새 토큰 행을 덮어쓰므로 초기화 방식 무관 → False로 비활성화.
     # Mod Record: skip_partial_state=True (w/o EA ablation) 시 mean_resizing=True 로 전환해
     # 새 토큰을 fp32 multivariate normal 분포로 초기화한다. 기본 흐름은 mean_resizing=False

@@ -46,15 +46,14 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 # Mod Record: WSL2 + NCCL 2.27.5 (PyTorch 2.10에 동봉)에서 P2P/SHM 통신 경로가 깨지는 회귀 버그.
 # 증상: DDP 초기화 _verify_param_shape_across_processes에서 ncclUnhandledCudaError "out of memory".
-# P2P/SHM/IB를 모두 비활성화하고 SOCKET 통신 강제. 단일 머신 2-GPU 환경에서 성능 손실은 무시 가능.
+# P2P/SHM/IB를 모두 비활성화하고 SOCKET 통신을 사용한다.
 # 단, vLLM colocate 모드에서 vLLM 자체의 NCCL 통신에도 영향을 줄 수 있음 — 문제 발생 시 케이스별 조정.
 os.environ.setdefault("NCCL_P2P_DISABLE", "1")
 os.environ.setdefault("NCCL_SHM_DISABLE", "1")
 os.environ.setdefault("NCCL_IB_DISABLE", "1")
 
-# Mod Record: 이전에 CUDA_VISIBLE_DEVICES를 LOCAL_RANK로 제한하는 방식으로 GPU 비대칭을
-# 해결했으나(rank 1 worker가 cuda:0에 reserved=6.5GB/peak=13GB 풀 잔존), HF Trainer의 DDP
-# wrap이 device_ids=[LOCAL_RANK]를 사용하므로 worker별 가시 GPU가 1개로 줄면 rank 1에서
+# Mod Record: HF Trainer의 DDP wrap은 device_ids=[LOCAL_RANK]를 사용하므로
+# CUDA_VISIBLE_DEVICES를 worker별로 GPU 1개만 보이도록 제한하면 rank 1에서
 # torch.nn.parallel._functions._get_stream의 _streams[1] 접근이 IndexError를 일으킨다.
 # 따라서 가시 GPU는 그대로 두고 main()에서 torch.cuda.set_device(LOCAL_RANK)로 default
 # device만 변경하는 방식으로 전환했다 (main 함수 내 구현 참고).
@@ -332,7 +331,6 @@ def main(cfg: DictConfig) -> None:
         # 독립 로드하므로 매 forward 시작 시 rank 0 → 다른 rank로 broadcast할 필요 없다.
         # broadcast_buffers=True(기본값)는 NF4 메타데이터(absmax/quant_state)까지 broadcast하여
         # rank 0에 staging 버퍼를 일시 점유시킨다. SFT trainer.py와 동일하게 끄기.
-        # GPU 0/1 메모리 비대칭(15GB vs 8.6GB) 진단의 일환.
         ddp_broadcast_buffers=False,
         optim=cfg.training.get("optim", "paged_adamw_32bit"),
     )

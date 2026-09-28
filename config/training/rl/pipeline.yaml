@@ -88,9 +88,8 @@ training:
   # 할당이다. RL은 generation(num_generations=16) + 긴 시퀀스 + 대형 vocab(152232) logits로
   # optimizer.step 시점에 PyTorch가 GPU를 거의 다 reserve한 상태가 되어, managed 할당이
   # 자리를 못 찾고 `pythonInterface.cpp:670 out of memory`로 실패했다 (WSL2 2-GPU DDP).
-  # RL adapter는 ~80M 파라미터뿐이라 fp32 Adam state가 ~640MB로 작으므로, PyTorch 풀 안에서
-  # 할당하는 adamw_torch로 두면 managed 경로 실패가 사라진다. (paged가 유리한 건 optimizer
-  # state가 큰 경우인데 RL은 해당 없음.) 메모리가 더 빠듯하면 num_generations/batch를 줄인다.
+  # adamw_torch는 optimizer state를 PyTorch 풀 안에서 할당하여 managed 경로를 피한다.
+  # 메모리가 부족하면 num_generations/batch를 줄인다.
   optim: "adamw_torch"
   max_steps: 50000                          # 0 = 전체 epoch 기반
 
@@ -104,13 +103,9 @@ rl:
   num_iterations: 2                     # roll-out 재활용 횟수
 
   # vLLM 설정 (기본 비활성화 — 아래 Mod Record 참고)
-  # Mod Record: NF4 base + LoRA 환경에서 vLLM colocate가 수치적으로 발산함을 확인.
-  # PEFT의 NF4 LoRA merge는 sync 시 dequant→add→re-quantize 라운드 트립을 수행하는데,
-  # 4bit 재양자화 손실(peft/tuners/lora/bnb.py:397에서 "rounding errors" 경고)이 매 step
-  # 누적되어 vLLM 정책과 훈련 정책 간 토큰 logprob 차이가 폭증한다. 결과: importance
-  # sampling ratio 붕괴(~e-26) + K3 KL 추정자 폭주(1e+26+) → loss 발산 + grad NaN.
-  # 따라서 NF4 환경에서는 HF generate가 안정적이며 200~300 토큰 시퀀스에서 더 빠름.
-  # vLLM은 bf16 base + 긴 시퀀스(≥1024) + 멀티 GPU 환경에서만 의미 있음.
+  # Mod Record: NF4 LoRA merge는 sync 시 dequant→add→re-quantize를 수행하므로
+  # 양자화 반올림 오차로 생성 정책과 훈련 정책 사이에 차이가 생길 수 있다.
+  # 기본값은 HF generate이며, vLLM을 사용할 때는 모델 정밀도와 정책 동기화를 확인한다.
   use_vllm: false
   vllm_mode: "colocate"                 # "colocate" 또는 "server" (3 GPU 이상 환경)
   vllm_gpu_memory_utilization: 0.45    # RTX 3090 24GB 기준. OOM 시 0.4로 낮춤

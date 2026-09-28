@@ -7,9 +7,9 @@ Mod Record: 기존에는 embed_tokens.weight / lm_head.weight 전체에 requires
 gradient hook으로 기존 토큰 행을 0으로 마스킹하는 방식을 사용했다.
 이 방식의 문제:
   - backward 시 152232행 전체에 대한 gradient 계산 (낭비)
-  - AdamW optimizer가 152232행 전체의 m, v state를 유지 → ~8.8GB VRAM 낭비
+  - AdamW optimizer가 기존 토큰을 포함한 전체 행의 m, v state를 유지
 수정: PartialEmbedding / PartialLMHead 모듈로 교체하여 새 토큰 567행만 nn.Parameter로 분리.
-optimizer state는 ~16MB로 감소, backward도 필요한 부분만 계산.
+optimizer state와 backward 계산을 새 토큰 행에 한정한다.
 """
 
 import json
@@ -79,7 +79,7 @@ class PartialEmbedding(nn.Module):
         self.register_buffer("global_to_local", global_to_local)
 
         # 새 토큰 행만 학습 가능 파라미터로 분리
-        # optimizer state: num_new × H × 2(m,v) × 4bytes ≈ 16MB
+        # optimizer state는 새 토큰 행의 momentum/variance만 유지한다.
         self.new_embed = nn.Parameter(
             original_embed.weight[new_ids_tensor].detach().clone()
         )
@@ -396,4 +396,4 @@ def _setup_partial_training(
     logger.info(f"  - embed_tokens.new_embed: ({num_new}, {hidden})")
     logger.info(f"  - lm_head.new_lm_head:    ({num_new}, {hidden})")
     optimizer_mb = trainable_params * 2 * 4 / 1024 / 1024  # m, v 각 fp32
-    logger.info(f"  optimizer state: ~{optimizer_mb:.1f}MB (기존 gradient hook 방식 ~8800MB 대비)")
+    logger.info(f"  optimizer state: ~{optimizer_mb:.1f}MB")

@@ -41,16 +41,12 @@ lora:
 
 data:
   arrow_dir: "data/dataset/processed_dataset/rplan/arrow"
-  # 전체 데이터 기준: 전체 시퀀스 p99=384, max=446 토큰 (프롬프트+출력 합산)
   # truncation 안전망 — collator는 dynamic padding 사용이므로 패딩 길이에 영향 없음
   max_length: 1024
   aug_pipeline_config: "config/training/augmentation/sft.yaml"
 
 distributed:
   # 사용할 GPU 수. 1이면 단일 GPU 모드, 2 이상이면 torchrun DDP로 자동 전환
-  # Mod Record: PyTorch 2.10 + bitsandbytes NF4 + DDP 조합에서 _verify_param_shape_across_processes
-  # 단계에서 OOM 발생(24GB GPU 기준). mean_resizing/broadcast_buffers 비활성화로도 해결 안 됨.
-  # 위 내용은 과거 진단 기록이며 현재 기본값은 GPU 4대 DDP이다.
   nproc_per_node: 4
 
 resume:
@@ -82,9 +78,7 @@ training:
   max_steps: 0                        # 0 = 전체 epoch 기반 학습
   output_dir: "data/models/${model.name}/checkpoints/sft/${training.run_name}"
   # optimizer 선택:
-  #   - adamw_torch (기본): GPU에 momentum/variance fp32 상주. SFT의 peak 메모리(per_device=8 + accum=1)에서
-  #     안정적으로 작동. ~640MB GPU 추가 사용.
-  #   - paged_adamw_32bit: bitsandbytes의 CUDA Unified Memory 페이징 사용. RL처럼 batch peak가 작은 환경에서는
-  #     ~640MB 절약 가능하지만, SFT의 큰 peak에서는 WSL2 환경에서 OOM 발생(pythonInterface.cpp:670).
-  #     RTX 3090 24GB + WSL2 환경에서는 사용 비추천.
+  #   - adamw_torch (기본): GPU에 momentum/variance fp32 상태를 유지한다.
+  #   - paged_adamw_32bit: bitsandbytes의 CUDA Unified Memory 페이징을 사용한다.
+  #     변경 시 운영체제·CUDA 환경과 peak 메모리 요구량의 호환성을 확인한다.
   optim: "adamw_torch"

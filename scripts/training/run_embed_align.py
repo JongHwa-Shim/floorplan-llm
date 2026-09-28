@@ -39,7 +39,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 # Mod Record: WSL2 + NCCL 2.27.5 (PyTorch 2.10에 동봉)에서 P2P/SHM 통신 경로가 깨지는 회귀 버그.
 # 증상: DDP 초기화 _verify_param_shape_across_processes에서 ncclUnhandledCudaError "out of memory".
-# P2P/SHM/IB를 모두 비활성화하고 SOCKET 통신 강제. 단일 머신 2-GPU 환경에서 성능 손실은 무시 가능.
+# P2P/SHM/IB를 모두 비활성화하고 SOCKET 통신을 사용한다.
 os.environ.setdefault("NCCL_P2P_DISABLE", "1")
 os.environ.setdefault("NCCL_SHM_DISABLE", "1")
 os.environ.setdefault("NCCL_IB_DISABLE", "1")

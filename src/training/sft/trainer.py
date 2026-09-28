@@ -24,9 +24,8 @@ class SFTAdapterTrainer(Trainer):
 
     표준 ``Trainer._save``는 PEFT 모델을 ``self.model.save_pretrained(output_dir, state_dict=...)``로
     저장하는데 ``save_embedding_layers``를 지정하지 않아, PEFT 기본값 ``"auto"``가 vocab resize를 감지해
-    resize된 ``embed_tokens``/``lm_head``(~4.36GB, F32)를 어댑터에 함께 저장한다. 이 두 레이어는 SFT에서
-    frozen이고 로드 시 항상 ``partial_state.pt``에서 주입되므로 순전히 중복이며(저장본과 partial_state.pt
-    값이 byte-identical), 어댑터 크기를 ~14배 부풀린다(323MB 어댑터 → 4.69GB 파일).
+    resize된 ``embed_tokens``/``lm_head``를 어댑터에 함께 저장한다. 이 두 레이어는 SFT에서
+    frozen이고 로드 시 항상 ``partial_state.pt``에서 주입되므로 중복 저장할 필요가 없다.
 
     ``_save``를 오버라이드해 ``save_embedding_layers=False``로 순수 LoRA 어댑터만 저장한다. main-process
     가드/FSDP·DeepSpeed 분기는 상위 ``save_model``에 그대로 있으므로 여기서는 PEFT 저장 분기만 재현한다
@@ -119,7 +118,7 @@ def build_training_arguments(cfg: DictConfig) -> TrainingArguments:
         # NF4 buffer는 rank간 동기화 불필요(각 rank가 동일하게 로드)하므로 False로 비활성화.
         ddp_broadcast_buffers=False,
         # Mod Record: paged_adamw_32bit은 momentum/variance fp32 텐서를 CPU RAM에 페이징하여
-        # GPU 메모리를 절약한다. LoRA trainable params 80M 기준 ~640MB GPU 절약. 디폴트는
+        # GPU 메모리 사용을 줄일 수 있다. 디폴트는
         # 기존 adamw_torch로 두어 외부 호환성 보존, config에서 paged_adamw_32bit로 변경 가능.
         optim=train_cfg.get("optim", "adamw_torch"),
     )

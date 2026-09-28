@@ -5,7 +5,7 @@ Mod Record: 참조 코드(temp/rl_context)에서는 embed_align.model_loader.loa
 공개 API로 추출하여 재사용한다.
 
 Mod Record: DoRA(use_dora=True)에서 표준 LoRA로 전환. DoRA는 unmerged inference 시
-delta_W = lora_B @ lora_A 전체 행렬(O(d²))을 materialization하여 rollout generation이 ~240× 느려짐.
+delta_W = lora_B @ lora_A 전체 행렬을 materialization하므로 추가 연산이 필요하다.
 
 멀티 어댑터 스태킹 구조:
     base(NF4, frozen) + partial_state 주입

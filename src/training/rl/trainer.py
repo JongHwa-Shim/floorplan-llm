@@ -158,10 +158,9 @@ class RLTrainer(GRPOTrainer):
         raw_model = self.accelerator.unwrap_model(self.model)
         # RL adapter만 선택적 저장 (PEFT는 save_dir/rl/ 서브디렉토리에 저장)
         # Mod Record (체크포인트 비대화 수정): save_embedding_layers=False로 embed_tokens/lm_head
-        # 저장을 억제한다. PEFT는 vocab resize를 감지하면 기본값("auto")으로 이 두 레이어(~2.18GB)를
+        # 저장을 억제한다. PEFT는 vocab resize를 감지하면 기본값("auto")으로 이 두 레이어를
         # 어댑터에 함께 저장하는데, RL에서는 frozen이고 로드 시 항상 partial_state.pt에서 주입되므로
-        # 순전히 중복(저장본과 partial_state.pt 값이 byte-identical 확인)이다. 억제 시 체크포인트가
-        # ~2.34GB → ~161MB로 축소되며, 로드/추론/Resume은 partial_state.pt 주입에 의존하므로 무영향.
+        # 중복 저장하지 않는다. 로드/추론/Resume은 partial_state.pt 주입을 유지한다.
         raw_model.save_pretrained(
             str(save_dir), selected_adapters=["rl"], save_embedding_layers=False
         )
