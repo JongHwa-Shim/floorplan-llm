@@ -100,3 +100,108 @@ data/**
 !data/**/.gitkeep
 
 temp/**
+
+# =============================================================================
+# baselines/ — 외부 baseline repo clone 위치 (논문 실험용)
+# =============================================================================
+baselines/
+
+# =============================================================================
+# experiments/ — 실험 산출물 (생성 결과, 렌더링, 메트릭, 표/그림)
+# =============================================================================
+experiments/
+
+# =============================================================================
+# .agents/ — 에이전트 스킬 및 관련 문서 (git 추적 제외)
+# =============================================================================
+.agents/
+
+# =============================================================================
+# scripts/ 하위 산출물/유틸 폴더 (git 추적 제외)
+# =============================================================================
+scripts/figures/
+scripts/metrics/*
+scripts/tables/*
+scripts/user_study/
+
+# =============================================================================
+# 로컬 연구 문서 / 실행 이력 / 검증 보고서
+# 공개 설치·실행 안내는 루트 README.md에서 관리한다.
+# 이미 추적하던 파일은 git rm --cached로 로컬 파일을 보존하며 추적 해제한다.
+# =============================================================================
+/docs/
+reports/
+results/
+artifacts/
+benchmarks/
+/scripts/experiments/
+/config/experiments/
+/scripts/utils/suggest_figure_selections.py
+/scripts/utils/select_perbucket200_testset.py
+/scripts/utils/select_unified_testset.py
+*EXPERIMENT*.md
+*experiment*.md
+*RESULT*.md
+*result*.md
+*PROGRESS*.md
+*progress*.md
+*SUMMARY*.md
+*summary*.md
+*FINDINGS*.md
+*findings*.md
+
+# =============================================================================
+# 실험 수치 / 표 / 그림 / 생성 산출물 (저장 위치가 바뀌어도 기본 제외)
+# 공개 예제 파일이 필요하면 해당 경로만 별도로 검토해 허용한다.
+# =============================================================================
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.parquet
+*.arrow
+*.npy
+*.npz
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.pdf
+*metrics*.json
+*metrics*.jsonl
+*results*.json
+*results*.jsonl
+figure_selections*.yaml
+
+# =============================================================================
+# 훈련 상태 / 모델 가중치 / 추적 서비스 산출물 / 환경 백업
+# =============================================================================
+wandb/
+mlruns/
+mlartifacts/
+runs/
+checkpoints/
+.hydra/
+events.out.tfevents.*
+*.wandb
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+trainer_state.json
+*.bak
+/pyproject.toml.rl
+/uv.lock.rl
+
+# 로컬 실험·평가·개발 검증 도구 (공개 코어 파이프라인과 분리)
+/tests/
+/scripts/normalize/
+/scripts/render/
+/scripts/training/augmentation/
+/config/training/augmentation/validate_augmentation/
+/config/training/augmentation/ours_*.yaml
+/scripts/utils/dump_gt_as_generations.py
+/AGENTS.md
+/.codex
+*.bundle
