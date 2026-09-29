@@ -17,7 +17,7 @@ model:
   vocab_extension: "${model.tokenizer_dir}/vocab_extension.json"
   # merged 모드용 (merge_model.py로 사전 생성된 경로)
   model_dir: "data/models/${model.name}/merged_checkpoints"
-  training_stage: "sft"                                                         # 출력 경로 레이블 전용
+  training_stage: "${inference.model_variant}"  # 출력 경로 레이블
 
 quantization:
   load_in_4bit: true
@@ -27,6 +27,7 @@ quantization:
 
 # 추론 모드 설정
 inference:
+  model_variant: "full"  # full(SFT+RL), sft, embed_align 또는 custom
   # "adapters": Hub + partial_state + adapter 체인 (권장, adapter 파일만 필요)
   # "merged":   pre-merged full model 로드 (merge_model.py 유틸로 사전 생성 필요)
   load_mode: "adapters"
@@ -34,21 +35,11 @@ inference:
   # adapters 모드에서 적재할 adapter 목록 (순서대로 적용)
   # 모든 adapter는 merge 없이 named adapter로 유지됨 (PEFT load_adapter API 사용)
   # 비어있으면 partial_state만 주입된 embed-align base model로 추론
-  adapters: 
-    - path: "data/models/Qwen2.5-Coder-7B/checkpoints/sft/10epoch additional training using sft-lora-0424-first-begin(20epoch)/checkpoint-105399"
+  adapters:
+    - path: "data/models/${model.name}/final_checkpoints/sft"
       name: "sft"
-  # 예시:
-  # pre-stasge 모델 사용 (빈 어댑터 리스트)
-  # adapters: []
-
-  # sft 모델 사용
-  # adapters: 
-    # - path: "data/models/${model.name}/final_checkpoints/sft"
-    #   name: "sft"
-
-  # GRPO까지 적용하려면 sft 모델에 이것까지 더해주기
-    # - path: "data/models/${model.name}/final_checkpoints/grpo"
-    #   name: "grpo"
+    - path: "data/models/${model.name}/final_checkpoints/rl"
+      name: "rl"
 
 # 입력 설정
 input:

@@ -40,6 +40,7 @@ lora:
   bias: "none"
 
 data:
+  held_out_room_count: null  # 분할 설정과 동일하게 지정하며 세 학습 단계 모두 검증
   arrow_dir: "data/dataset/processed_dataset/rplan/arrow"
   # truncation 안전망 — collator는 dynamic padding 사용이므로 패딩 길이에 영향 없음
   max_length: 1024
@@ -70,7 +71,7 @@ training:
   logging_steps: 10
   report_to: "wandb"
   project_name: "floorplan-llm"
-  run_name: "10epoch additional training using sft-lora-0424-first-begin(20epoch)"
+  run_name: "floorplan-sft"
   seed: 42
   # 체크포인트 최대 보존 수 (null = 제한 없이 전체 보존)
   save_total_limit: null

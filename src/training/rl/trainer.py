@@ -37,7 +37,7 @@ from trl import GRPOTrainer
 
 from src.training.augmentation.tokenizer import Vocab
 from src.training.rl.rewards import REWARD_NAMES, compute_all_rewards
-from src.training.rl.advantage import gdpo_group_normalize, compute_token_advantages
+from src.training.rl.advantage import gdpo_group_normalize, compute_token_advantages, DEFAULT_BATCH_EPS
 
 logger = logging.getLogger(__name__)
 
@@ -501,7 +501,7 @@ class RLTrainer(GRPOTrainer):
             error_masks_batch=self._error_masks_buffer,
             completion_lengths=completion_lengths,
             max_seq_len=T,
-            eps=eps,
+            eps=float(self.advantage_cfg.get("batch_eps", DEFAULT_BATCH_EPS)),
             use_token_credit_assignment=use_token_credit_assignment,
             gather_fn=self.accelerator.gather,
         )  # (B_local, T)

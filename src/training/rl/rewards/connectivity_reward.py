@@ -23,6 +23,9 @@ from typing import TYPE_CHECKING
 from shapely.errors import GEOSException
 from shapely.geometry import Polygon, box
 
+from src.utils.spatial import polygon_centroid
+from src.training.rl.rewards.room_assignment import has_consistent_assignment
+
 if TYPE_CHECKING:
     from src.training.rl.rewards.parser import ParsedDoor, ParsedFloorplan, ParsedRoom
 
@@ -44,9 +47,8 @@ def compute_connectivity_reward(
 
     Mod Record: metadata가 모델 시점으로 재구성된 후 헝가리안 매칭은 앵커 방
     (type+coords 모두 visible)에 대해서만 결정적 1:1 매칭을 만든다. drop_coords
-    /drop_type 방(자유 방)은 매칭 모호하므로 직접 매칭하지 않고, 제약 검사 시점에
-    후보 출력 방 집합으로 확장한 뒤 어떤 (a, b) 쌍에서든 제약이 만족되면 통과로
-    채점한다(satisfiability-based 채점).
+    /drop_type 방(자유 방)은 후보 집합을 구성한 뒤 모든 연결 조건을 동시에
+    만족하는 일대일 대응이 있는지 검사한다.
     Mod Record: 중심점의 20px 경계 근접 검사를 문 영역의 겹침 면적으로 교체한다.
     전처리의 5×5 확장에 대응하는 사방 2px 확장과 면적 균형 기준을 사용한다.
     모든 출력 방에 대해 문당 연결 쌍을 한 번 정하여 후보별 중복 배정을 방지한다.
@@ -88,9 +90,9 @@ def compute_connectivity_reward(
     )
     input_rooms = metadata.get("rooms", [])
 
-    # DOOR 존재 여부 검증
-    satisfied = 0
-    total_with_door = 0
+    # Mod Record: 같은 RID가 연결 조건마다 다른 출력 방으로 바뀌지 않게 한다.
+    allowed = connected_pairs | {(b, a) for a, b in connected_pairs}
+    constraints = []
 
     for edge in edges:
         if not edge.get("has_door", bool(edge.get("door"))):
@@ -100,24 +102,30 @@ def compute_connectivity_reward(
         if len(pair) < 2:
             # drop_pair("both"/"one")으로 마스킹된 엣지는 채점 불가 → 분모에서도 제외
             continue
-        total_with_door += 1
+        constraints.append((pair[0], pair[1], allowed))
 
-        rid_a, rid_b = pair[0], pair[1]
-        cands_a = _get_candidate_output_indices(rid_a, input_rooms, non_outline, rid_to_room_idx)
-        cands_b = _get_candidate_output_indices(rid_b, input_rooms, non_outline, rid_to_room_idx)
-
-        if not cands_a or not cands_b:
-            continue
-
-        # 입력에서 식별 가능한 후보 중 실제 문 연결로 선택된 쌍이 있으면 만족한다.
-        if any((min(a, b), max(a, b)) in connected_pairs
-               for a in cands_a for b in cands_b if a != b):
-            satisfied += 1
-
-    if total_with_door == 0:
+    if not constraints:
         return 1.0
+    candidates = _assignment_candidates(constraints, input_rooms, non_outline, rid_to_room_idx)
+    return float(has_consistent_assignment(candidates, constraints))
 
-    return float(satisfied == total_with_door)
+
+def _assignment_candidates(constraints, input_rooms, output_rooms, anchors):
+    """관계에 사용된 방과 고정된 앵커의 후보를 모은다.
+
+    Args:
+        constraints: RID 쌍과 허용 출력 쌍 목록.
+        input_rooms: 입력에 노출된 방.
+        output_rooms: 외곽선을 제외한 생성 방.
+        anchors: 좌표·종류가 주어진 방의 고정 매칭.
+    Returns:
+        RID별 후보. 앵커가 차지한 출력 방도 예약한다.
+    Raises:
+        없음.
+    """
+    required = {rid for a, b, _ in constraints for rid in (a, b)} | set(anchors)
+    return {rid: _get_candidate_output_indices(rid, input_rooms, output_rooms, anchors)
+            for rid in required}
 
 
 # ---------------------------------------------------------------------------
@@ -175,11 +183,17 @@ def _get_candidate_output_indices(
 
     if has_coords and not has_type:
         # drop_type: 좌표 근접 출력 방
-        in_cx, in_cy = _compute_centroid_from_raw(coords)
+        try:
+            in_cx, in_cy = _compute_centroid_from_raw(coords)
+        except (ValueError, TypeError):
+            return []
         thresh_sq = coord_threshold ** 2
         candidates: list[int] = []
         for i, r in enumerate(output_rooms):
-            out_cx, out_cy = _compute_centroid_from_parsed(r)
+            try:
+                out_cx, out_cy = _compute_centroid_from_parsed(r)
+            except (ValueError, TypeError):
+                continue
             dist_sq = (in_cx - out_cx) ** 2 + (in_cy - out_cy) ** 2
             if dist_sq <= thresh_sq:
                 candidates.append(i)
@@ -233,11 +247,19 @@ def _hungarian_match(
             continue
         if not room.get("coords"):
             continue
+        try:
+            _compute_centroid_from_raw(room["coords"])
+        except (ValueError, TypeError):
+            continue
         input_by_type.setdefault(room_type, []).append(room)
 
     # 출력 방 타입별 분류
     output_by_type: dict[str, list[tuple[int, "ParsedRoom"]]] = {}
     for idx, room in enumerate(output_rooms):
+        try:
+            _compute_centroid_from_parsed(room)
+        except (ValueError, TypeError):
+            continue
         t = room.room_type
         output_by_type.setdefault(t, []).append((idx, room))
 
@@ -284,11 +306,7 @@ def _compute_centroid_from_raw(coords: list[int]) -> tuple[float, float]:
     Returns:
         (cx, cy) 무게중심.
     """
-    if not coords:
-        return (0.0, 0.0)
-    xs = coords[0::2]
-    ys = coords[1::2]
-    return (sum(xs) / len(xs), sum(ys) / len(ys))
+    return polygon_centroid(coords)
 
 
 def _compute_centroid_from_parsed(room: "ParsedRoom") -> tuple[float, float]:
@@ -300,11 +318,7 @@ def _compute_centroid_from_parsed(room: "ParsedRoom") -> tuple[float, float]:
     Returns:
         (cx, cy) 무게중심.
     """
-    if not room.coords:
-        return (0.0, 0.0)
-    xs = [c[0] for c in room.coords]
-    ys = [c[1] for c in room.coords]
-    return (sum(xs) / len(xs), sum(ys) / len(ys))
+    return polygon_centroid(room.coords)
 
 
 def _door_connected_pairs(

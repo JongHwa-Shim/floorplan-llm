@@ -19,6 +19,8 @@ from typing import Generator
 import datasets
 import orjson
 
+from src.utils.spatial import refresh_spatial_relations
+
 from src.build_dataset.json2arrow.schema import get_floorplan_features
 
 log = logging.getLogger(__name__)
@@ -76,7 +78,14 @@ def normalize_record(record: dict) -> dict:
     """
     raw_rooms = record["rooms"]
     raw_edges = record["edges"]
-    raw_spatial = record["spatial"]
+    # Mod Record: 기존 JSONL을 다시 변환할 때도 같은 폴리곤 기준으로 라벨을 갱신한다.
+    spatial_sample = {"rooms": raw_rooms, "spatial": [
+        {"rid_a": int(a), "rid_b": int(b), "direction": direction}
+        for a, b, direction in record["spatial"]
+    ]}
+    refresh_spatial_relations(spatial_sample)
+    raw_spatial = [[sp["rid_a"], sp["rid_b"], sp["direction"]]
+                   for sp in spatial_sample["spatial"]]
 
     # rooms: list of dicts → dict of lists (columnar)
     rooms = {

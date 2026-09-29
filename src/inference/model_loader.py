@@ -10,12 +10,15 @@ PEFT의 named adapter API(load_adapter)를 사용해 모든 adapter를 merge 없
 """
 
 import logging
+
 from pathlib import Path
 
 import torch
 from omegaconf import DictConfig
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+
+from src.inference.adapter_selection import select_adapters
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +160,7 @@ def _load_adapters_mode(
             - model: adapter 체인이 적용된 AutoModelForCausalLM 또는 PeftModel
             - tokenizer: 커스텀 토큰이 포함된 AutoTokenizer
     """
+    adapters = select_adapters(cfg.inference)
     embed_align_dir = Path(cfg.model.embed_align_dir)
     partial_state_path = embed_align_dir / "partial_state.pt"
 
@@ -166,7 +170,6 @@ def _load_adapters_mode(
     logger.info("Hub 모델 로드 + partial_state.pt 주입: %s", cfg.model.hub_id)
     model, tokenizer = _load_base_with_partial_state(cfg, partial_state_path)
 
-    adapters = list(cfg.inference.get("adapters", None) or [])
     if not adapters:
         logger.warning("inference.adapters가 비어있음. partial_state만 주입된 base model 반환.")
         return model, tokenizer

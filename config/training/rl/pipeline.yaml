@@ -14,7 +14,7 @@ model:
   name: "Qwen2.5-Coder-7B"
   hub_id: "${model.user}/${model.name}"                                              # HF Hub 전체 경로
   embed_align_dir: "data/models/Qwen2.5-Coder-7B/final_checkpoints/embed_align"             # partial_state.pt 위치
-  sft_adapter_dir: "data/models/Qwen2.5-Coder-7B/final_checkpoints/sft/10epoch additional training using sft-lora-0424-first-begin(20epoch)/checkpoint-110418"                 # SFT adapter 위치 (frozen)
+  sft_adapter_dir: "data/models/${model.name}/final_checkpoints/sft"  # frozen SFT
   tokenizer_dir: "data/models/${model.name}/tokenization"                            # 확장 토크나이저 경로
   vocab_extension: "${model.tokenizer_dir}/vocab_extension.json"
 
@@ -42,12 +42,11 @@ lora:
   bias: "none"
 
 data:
+  held_out_room_count: null  # 분할 설정과 동일하게 지정하며 세 학습 단계 모두 검증
   arrow_dir: "data/dataset/processed_dataset/rplan/arrow"
   # 프롬프트 생성용 증강 (입력 조건만 증강, 출력은 모델이 생성)
   aug_pipeline_config: "config/training/augmentation/sft.yaml"
   max_prompt_length: 1024
-  # 전체 데이터 기준: mean=167, p99=232, max=328 (도어 포함)
-  # 512면 max 대비 1.5× 여유, 2048 대비 4× 속도 개선
   max_completion_length: 512
 
 distributed:
@@ -78,18 +77,12 @@ training:
   save_steps: 1000
   report_to: "wandb"
   project_name: "floorplan-llm"
-  run_name: "260706_rl-paper-aligned-50000"
+  run_name: "floorplan-rl"
   seed: 42
   # 체크포인트 최대 보존 수 (null = 제한 없이 전체 보존)
   save_total_limit: null
   # optimizer 선택
-  # Mod Record (WSL2 OOM 수정): paged_adamw_32bit는 optimizer state를 cudaMallocManaged
-  # (CUDA managed/unified memory)로 잡는데, 이는 PyTorch caching allocator 풀 바깥의 별도
-  # 할당이다. RL은 generation(num_generations=16) + 긴 시퀀스 + 대형 vocab(152232) logits로
-  # optimizer.step 시점에 PyTorch가 GPU를 거의 다 reserve한 상태가 되어, managed 할당이
-  # 자리를 못 찾고 `pythonInterface.cpp:670 out of memory`로 실패했다 (WSL2 2-GPU DDP).
-  # adamw_torch는 optimizer state를 PyTorch 풀 안에서 할당하여 managed 경로를 피한다.
-  # 메모리가 부족하면 num_generations/batch를 줄인다.
+  # PyTorch 메모리 할당자를 사용하는 AdamW. 메모리 부족 시 생성 수·배치를 조정한다.
   optim: "adamw_torch"
   max_steps: 50000                          # 0 = 전체 epoch 기반
 
@@ -202,5 +195,6 @@ rewards:
 
 # GDPO + 토큰 신용할당 어드밴티지 계산 설정
 advantage:
-  eps: 1.0e-8                           # 수치 안정성 엡실론
+  eps: 1.0e-8                           # 보상별 GDPO 그룹 정규화
+  batch_eps: 0.1                        # 최종 토큰 정규화 분모: 시퀀스 평균의 표준편차 + 상수
   use_token_credit_assignment: true     # false로 설정 시 전체 신용할당 비활성화 (균등 broadcast)

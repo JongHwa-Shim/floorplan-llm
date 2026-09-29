@@ -1,194 +1,61 @@
-"""R_spatial 보상함수 모듈.
-
-공간 관계(8방위 방향) 조건 충족도를 측정하는 보상.
-
-두 방의 무게중심 벡터를 8방위 각도로 분류하고,
-모든 입력 SP(Spatial Relation) 방향과 일치하는지 이진값을 반환한다.
-
-헝가리안 매칭은 connectivity_reward와 동일한 함수를 재사용한다.
-신용할당: 없음 (sequence-level 보상).
-
-8방위 정의 (token_definitions.py SPATIAL_DIRECTIONS):
-    right, right-below, below, left-below,
-    left, left-above, above, right-above
-"""
+"""공통 중심점과 일대일 방 대응으로 공간 방향을 평가한다."""
 
 from __future__ import annotations
 
-import logging
-import math
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from src.training.rl.rewards.parser import ParsedFloorplan
-
-logger = logging.getLogger(__name__)
-
-# 8방위 각도 범위 (degrees, 반시계 방향, East=0)
-# 각 방위는 45° 씩 분할
-_DIRECTIONS = [
-    "right",        # -22.5 ~ 22.5
-    "right-below",  # -67.5 ~ -22.5 (또는 292.5 ~ 337.5)
-    "below",        # -112.5 ~ -67.5 (또는 247.5 ~ 292.5)
-    "left-below",   # -157.5 ~ -112.5 (또는 202.5 ~ 247.5)
-    "left",         # ±157.5 ~ ±180
-    "left-above",   # 112.5 ~ 157.5
-    "above",        # 67.5 ~ 112.5
-    "right-above",  # 22.5 ~ 67.5
-]
+from src.utils.spatial import polygon_centroid, vector_to_direction
+from src.training.rl.rewards.room_assignment import has_consistent_assignment
+from src.training.rl.rewards.connectivity_reward import _hungarian_match, _assignment_candidates
 
 
-def compute_spatial_reward(
-    parsed: "ParsedFloorplan",
-    metadata: dict,
-) -> float:
-    """공간 관계 조건 충족도를 반환한다.
-
-    Mod Record: connectivity_reward와 동일하게 앵커 방은 헝가리안으로 결정 매핑하고,
-    자유 방(drop_coords/drop_type)은 후보 출력 방 집합으로 확장한 뒤 어떤 (a, b)
-    조합에서든 방향 조건이 만족되면 통과로 채점한다(satisfiability-based).
+def compute_spatial_reward(parsed, metadata: dict) -> float:
+    """모든 방향 조건을 동시에 만족하는 방 대응의 존재 여부를 반환한다.
 
     Args:
-        parsed: parse_output_tokens()의 반환값.
-        metadata: 모델 시점 메타데이터. 키:
-            - spatial (list[dict]): visible 공간 관계 조건. [{rid_a, rid_b, direction}]
-            - rooms (list[dict]): visible 방 정보 (자유 방은 type 또는 coords 마스킹).
-
+        parsed: 파싱된 생성 평면도.
+        metadata: 입력에 노출된 방과 공간 관계.
     Returns:
-        모든 방향 조건을 충족하면 1.0, 하나라도 다르면 0.0.
-
+        모든 방향 조건을 일관된 일대일 대응으로 충족하면 1.
     Raises:
-        없음.
+        없음. 중심점을 계산할 수 없는 방 쌍은 만족 후보에서 제외한다.
     """
-    # Mod Record: 형식 오류와 독립적으로 복원된 방의 공간 관계를 평가한다.
     if not parsed.rooms:
         return 0.0
-
-    spatial_conditions = metadata.get("spatial", [])
-    if not spatial_conditions:
-        return 1.0  # 공간 조건 없으면 만점
-
-    # 헝가리안 매칭 + 후보 탐색 헬퍼 재사용 (connectivity_reward에서 import)
-    from src.training.rl.rewards.connectivity_reward import (
-        _hungarian_match,
-        _get_candidate_output_indices,
-        _compute_centroid_from_parsed,
-    )
-
-    rid_to_room_idx = _hungarian_match(parsed, metadata)
-
-    # outline 제외 출력 방 리스트
-    output_rooms = [r for r in parsed.rooms if r.room_type != "outline"]
-    if not output_rooms:
-        return 0.0
-
-    input_rooms = metadata.get("rooms", [])
-
-    satisfied = 0
-    total = 0
-
-    for sp in spatial_conditions:
-        rid_a = sp.get("rid_a")
-        rid_b = sp.get("rid_b")
-        expected_dir = sp.get("direction", "")
-
-        if rid_a is None or rid_b is None:
-            continue
-
-        cands_a = _get_candidate_output_indices(rid_a, input_rooms, output_rooms, rid_to_room_idx)
-        cands_b = _get_candidate_output_indices(rid_b, input_rooms, output_rooms, rid_to_room_idx)
-
-        total += 1
-
-        if not cands_a or not cands_b:
-            continue
-
-        # 어떤 (a, b) 조합에서든 방향 조건이 만족되면 통과
-        if _exists_direction_pair(cands_a, cands_b, output_rooms, expected_dir,
-                                   _compute_centroid_from_parsed):
-            satisfied += 1
-
-    if total == 0:
+    spatial = metadata.get("spatial", [])
+    if not spatial:
         return 1.0
-
-    return float(satisfied == total)
-
-
-def _exists_direction_pair(
-    cands_a: list[int],
-    cands_b: list[int],
-    output_rooms: list,
-    expected_dir: str,
-    centroid_fn,
-) -> bool:
-    """후보 인덱스 두 집합에서 expected_dir 방향을 만족하는 (a, b) 쌍 존재 여부.
-
-    Args:
-        cands_a: 첫 번째 RID 후보 출력 방 인덱스.
-        cands_b: 두 번째 RID 후보 출력 방 인덱스.
-        output_rooms: outline 제외 출력 방 리스트.
-        expected_dir: 기대 방향 (8방위 중 하나).
-        centroid_fn: ParsedRoom → (cx, cy) 함수.
-
-    Returns:
-        조건 만족 쌍이 존재하면 True.
-    """
-    for a_idx in cands_a:
-        cx_a, cy_a = centroid_fn(output_rooms[a_idx])
-        for b_idx in cands_b:
-            if a_idx == b_idx:
+    output_rooms = [r for r in parsed.rooms if r.room_type != "outline"]
+    centers = {}
+    for index, room in enumerate(output_rooms):
+        try:
+            centers[index] = polygon_centroid(room.coords)
+        except (ValueError, TypeError):
+            continue
+    # Mod Record: 기하는 한 번만 계산하고 모든 방향 제약에 같은 RID 대응을 사용한다.
+    by_direction = {}
+    for a, first in centers.items():
+        for b, second in centers.items():
+            dx, dy = second[0] - first[0], second[1] - first[1]
+            if a == b or (abs(dx) < 1e-9 and abs(dy) < 1e-9):
                 continue
-            cx_b, cy_b = centroid_fn(output_rooms[b_idx])
-            dx = cx_b - cx_a
-            dy = cy_b - cy_a
-            if abs(dx) < 1e-9 and abs(dy) < 1e-9:
-                continue
-            if _vector_to_direction(dx, dy) == expected_dir:
-                return True
-    return False
+            by_direction.setdefault(vector_to_direction(dx, dy), set()).add((a, b))
+    constraints = [(sp["rid_a"], sp["rid_b"], by_direction.get(sp.get("direction"), set()))
+                   for sp in spatial if sp.get("rid_a") is not None and sp.get("rid_b") is not None]
+    if not constraints:
+        return 1.0
+    anchors = _hungarian_match(parsed, metadata)
+    candidates = _assignment_candidates(constraints, metadata.get("rooms", []), output_rooms, anchors)
+    return float(has_consistent_assignment(candidates, constraints))
 
 
 def _vector_to_direction(dx: float, dy: float) -> str:
-    """방향 벡터를 8방위 문자열로 변환한다.
-
-    이미지 좌표계 기준 (y축이 아래로 증가):
-        dy > 0 → 아래 방향 (below)
-        dy < 0 → 위 방향 (above)
-
-    Mod Record: 이전 구현은 atan2의 [-180, 180] 범위를 그대로 사용하여 left
-    분기에서만 ``angle >= 157.5 or angle < -157.5`` 형태의 wrap-around 비교를
-    사용했고, 다른 분기는 모두 ``low <= x < high`` (`<`)를 사용해 부등호 일관성이
-    깨져 있었다. 정확히 angle = ±157.5에서 분류가 비대칭이었다. atan2 결과를
-    [0, 360)으로 정규화하여 wrap을 한 곳(right만 0°/360° 경계)으로 모으고
-    모든 분기를 `<` (반열림 구간)로 통일한다.
+    """공통 8방위 계산을 기존 호출 경로에도 제공한다.
 
     Args:
-        dx: X 방향 성분.
-        dy: Y 방향 성분 (양수면 아래).
-
+        dx: X 좌표 차이.
+        dy: Y 좌표 차이.
     Returns:
-        8방위 문자열 중 하나.
+        이미지 좌표계의 8방위 문자열.
+    Raises:
+        ValueError: 벡터가 유한하지 않을 때.
     """
-    angle_rad = math.atan2(dy, dx)
-    angle_deg = math.degrees(angle_rad)
-    # [-180, 180] → [0, 360)으로 정규화하여 wrap 구간 단일화
-    if angle_deg < 0:
-        angle_deg += 360.0
-
-    # 모든 분기 ``low <= x < high`` 형태로 통일 (right만 wrap-around 경계 처리)
-    if angle_deg < 22.5 or angle_deg >= 337.5:
-        return "right"
-    elif angle_deg < 67.5:
-        return "right-below"
-    elif angle_deg < 112.5:
-        return "below"
-    elif angle_deg < 157.5:
-        return "left-below"
-    elif angle_deg < 202.5:
-        return "left"
-    elif angle_deg < 247.5:
-        return "left-above"
-    elif angle_deg < 292.5:
-        return "above"
-    else:  # 292.5 <= angle_deg < 337.5
-        return "right-above"
+    return vector_to_direction(dx, dy)

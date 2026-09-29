@@ -1,7 +1,7 @@
 """RL(강화학습) 훈련 실행 스크립트.
 
 SFT final 모델에 GDPO + 토큰 수준 신용할당 강화학습을 적용한다.
-Rule-based RLVR 보상함수로 11가지 보상을 사용한다.
+Rule-based RLVR 보상함수로 10가지 보상을 사용한다.
 롤아웃 생성은 기본적으로 HF generate를 사용한다 (NF4 환경에서 vLLM colocate는
 PEFT 4bit merge round-trip 손실로 정책 분포가 발산하므로 비활성화 — pipeline.yaml 주석 참고).
 

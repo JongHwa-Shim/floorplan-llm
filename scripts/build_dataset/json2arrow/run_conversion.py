@@ -24,6 +24,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import json
 import os
 import sys
 from glob import glob
@@ -43,6 +44,7 @@ if _PROJECT_ROOT not in sys.path:
 from src.build_dataset.json2arrow.converter import convert_to_arrow  # noqa: E402
 from src.build_dataset.json2arrow.schema import get_floorplan_features  # noqa: E402
 from src.build_dataset.json2arrow.validator import validate_conversion  # noqa: E402
+from src.build_dataset.json2arrow.split import holdout_pools, validate_held_out_count  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +55,7 @@ def split_and_save(
     val_size: int,
     test_size: int,
     seed: int,
+    held_out_room_count: int | None = None,
 ) -> datasets.DatasetDict:
     """Dataset을 train/validation/test로 분할하여 DatasetDict로 저장.
 
@@ -65,6 +68,7 @@ def split_and_save(
         val_size: validation 원본 평면도 개수.
         test_size: test 원본 평면도 개수.
         seed: 셔플 시드 (재현성 보장).
+        held_out_room_count: 학습·검증에서 제외할 시험 방 개수. None이면 무작위 분할.
 
     Returns:
         datasets.DatasetDict: train/validation/test split이 완료된 DatasetDict.
@@ -78,10 +82,15 @@ def split_and_save(
     if val_size + test_size >= total:
         raise ValueError("검증·시험 분할 후 훈련 평면도가 하나 이상 남아야 합니다.")
 
-    # 전체에서 test 분리
-    split1 = dataset.train_test_split(test_size=test_size, seed=seed)
-    test_ds = split1["test"]
-    remainder = split1["train"]
+    validate_held_out_count(held_out_room_count)
+    if "plan_id" in dataset.column_names and len(set(dataset["plan_id"])) != total:
+        raise ValueError("중복 plan_id가 있어 분할 간 원본 평면도 독립성을 보장할 수 없습니다.")
+    # Mod Record: 시험 방 개수 전체를 먼저 제외하여 남은 같은 개수가 학습에 섞이지 않게 한다.
+    if held_out_room_count is None:
+        split1 = dataset.train_test_split(test_size=test_size, seed=seed)
+        test_ds, remainder = split1["test"], split1["train"]
+    else:
+        test_ds, remainder = holdout_pools(dataset, held_out_room_count, test_size, val_size, seed)
 
     # 나머지에서 validation 분리
     split2 = remainder.train_test_split(test_size=val_size, seed=seed)
@@ -103,6 +112,13 @@ def split_and_save(
         }
     )
     dataset_dict.save_to_disk(output_dir)
+    # 분할 기록은 데이터 디렉토리에만 저장하며 Git 추적에서 제외된다.
+    manifest = {"seed": seed, "held_out_room_count": held_out_room_count,
+                "splits": {name: {"size": len(ds),
+                    "plan_ids": list(ds["plan_id"]) if "plan_id" in ds.column_names else None}
+                    for name, ds in dataset_dict.items()}}
+    (Path(output_dir) / "split_manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # DatasetDict 저장 후 루트 레벨 단일 Dataset 파일 제거
     # (convert_to_arrow()가 먼저 저장한 파일들이 load_from_disk()를 혼란시킴)
@@ -190,6 +206,7 @@ def main(cfg: DictConfig) -> None:
             val_size=cfg.split.val_size,
             test_size=cfg.split.test_size,
             seed=cfg.split.seed,
+            held_out_room_count=cfg.split.get("held_out_room_count"),
         )
     else:
         log.info("Split 비활성화 (split.enabled=false). 단일 Dataset으로 저장됨.")

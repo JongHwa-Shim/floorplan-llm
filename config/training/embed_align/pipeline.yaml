@@ -17,6 +17,7 @@ quantization:
   bnb_4bit_use_double_quant: false
 
 data:
+  held_out_room_count: null  # 분할 설정과 동일하게 지정하며 세 학습 단계 모두 검증
   # Arrow 데이터셋 경로
   arrow_dir: "data/dataset/processed_dataset/rplan/arrow"
   # 최대 시퀀스 길이 (초과 시 잘라냄)

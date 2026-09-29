@@ -10,23 +10,11 @@ $\\theta = \\text{atan2}(\\Delta y, \\Delta x)$로 각도를 구하고, ±22.5�
 
 from __future__ import annotations
 
-import math
 from itertools import combinations
 
 from src.build_dataset.rplan2json.room_extractor import RoomInstance
 
-# 8방위 각도 범위 (도 단위, 이미지 좌표계 기준)
-# atan2(dy, dx) → -180~+180도
-_DIRECTIONS = [
-    ("right",       -22.5,   22.5),
-    ("right-below",  22.5,   67.5),
-    ("below",        67.5,  112.5),
-    ("left-below",  112.5,  157.5),
-    ("left",        157.5,  180.0),    # 157.5~180 및 -180~-157.5
-    ("left-above", -157.5, -112.5),
-    ("above",      -112.5,  -67.5),
-    ("right-above", -67.5,  -22.5),
-]
+from src.utils.spatial import polygon_centroid, vector_to_direction
 
 
 def build_spatial_relations(
@@ -56,7 +44,8 @@ def build_spatial_relations(
         else:
             a, b = room_b, room_a
 
-        direction = _compute_direction(a.centroid, b.centroid)
+        # Mod Record: 저장된 픽셀 중심점 대신 출력과 같은 폴리곤 중심점을 사용한다.
+        direction = _compute_direction(polygon_centroid(a.coords), polygon_centroid(b.coords))
         spatial.append([a.rid, b.rid, direction])
 
     spatial.sort(key=lambda s: (s[0], s[1]))
@@ -79,18 +68,4 @@ def _compute_direction(
     Returns:
         8방위 문자열 (예: "right", "below", "left-above").
     """
-    dx = centroid_b[0] - centroid_a[0]
-    dy = centroid_b[1] - centroid_a[1]
-    angle_deg = math.degrees(math.atan2(dy, dx))  # -180 ~ +180
-
-    # "left" 방위는 ±157.5~±180 범위로 분할
-    if angle_deg > 157.5 or angle_deg <= -157.5:
-        return "left"
-
-    for direction, low, high in _DIRECTIONS:
-        if direction == "left":
-            continue
-        if low < angle_deg <= high:
-            return direction
-
-    return "right"  # fallback (경계값)
+    return vector_to_direction(centroid_b[0] - centroid_a[0], centroid_b[1] - centroid_a[1])

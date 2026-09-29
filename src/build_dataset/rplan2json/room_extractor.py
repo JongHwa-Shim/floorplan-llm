@@ -12,9 +12,12 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
+
 import cv2
 import numpy as np
 
+
+from src.utils.spatial import polygon_centroid
 
 @dataclass
 class TypeMergeConfig:
@@ -135,8 +138,7 @@ def extract_room_instances(
                 continue
 
             # centroid 계산
-            ys, xs = np.where(component_mask > 0)
-            cx, cy = float(xs.mean()), float(ys.mean())
+            cx, cy = polygon_centroid(coords)
 
             instances.append(
                 RoomInstance(

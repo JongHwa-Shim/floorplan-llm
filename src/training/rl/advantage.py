@@ -28,12 +28,16 @@ RLTrainer._apply_token_credit_assignment()에서 호출되는
 from __future__ import annotations
 
 import logging
+import math
 
 import torch
 
 from src.training.rl.rewards.credit_assignment import apply_token_credit_assignment
 
 logger = logging.getLogger(__name__)
+
+# 최종 토큰 정규화는 시퀀스 내부 차이를 증폭하므로 GDPO 엡실론과 구분한다.
+DEFAULT_BATCH_EPS = 0.1
 
 
 def gdpo_group_normalize(
@@ -49,15 +53,15 @@ def gdpo_group_normalize(
 
     ALL-PROCESS 데이터로 호출해야 올바른 그룹 통계를 계산할 수 있다.
 
-    Mod Record: ``use_gdpo_normalization=False`` 시 표준 GRPO (그룹 평균만 빼고 분산 정규화 미적용)
-    동작으로 fallback — 가이드 Exp 10 (GDPO vs Standard GRPO) 의 baseline 변형 지원.
+    Mod Record: ``use_gdpo_normalization=False`` 시 그룹 평균 차감 (분산 정규화 미적용)
+    동작을 사용한다. 결합 보상을 정규화하는 표준 GRPO와는 구별한다.
 
     Args:
         rewards_per_func: shape $(B_{total}, K)$
             $B_{total}$ = 전체 프로세스 completion 수 (gather 후).
         num_generations: 그룹 크기 G (프롬프트당 생성 개수).
         eps: 수치 안정성 엡실론.
-        use_gdpo_normalization: True 면 보상별 z-score(GDPO). False 면 단순 그룹 평균 차감(GRPO).
+        use_gdpo_normalization: True 면 보상별 z-score(GDPO). False 면 단순 그룹 평균 차감.
 
     Returns:
         정규화된 보상별 어드밴티지. shape $(B_{total}, K)$
@@ -88,7 +92,7 @@ def gdpo_group_normalize(
         std_k = torch.zeros_like(mean_k)
 
     if not use_gdpo_normalization:
-        # Standard GRPO: 분산 정규화 미적용, 그룹 평균만 빼기 (가이드 Exp 10 baseline)
+        # 분산 정규화 없이 그룹 평균만 차감한다.
         A_k = grouped - mean_k                                          # (N, G, K)
         return A_k.view(B_total, K)
 
@@ -106,7 +110,7 @@ def compute_token_advantages(
     error_masks_batch: list[dict[str, torch.Tensor]],
     completion_lengths: list[int],
     max_seq_len: int,
-    eps: float = 1e-8,
+    eps: float = DEFAULT_BATCH_EPS,
     use_token_credit_assignment: bool = True,
     gather_fn=None,
 ) -> torch.Tensor:
@@ -181,8 +185,13 @@ def _batch_normalize(
         전체 배치 통계를 적용한 로컬 토큰 어드밴티지. 패딩은 0.
 
     Raises:
-        없음.
+        ValueError: 분모 상수가 유한한 양수가 아닐 때.
     """
+    if not math.isfinite(eps) or eps <= 0:
+        raise ValueError("정규화 분모에 더하는 상수는 유한한 양수여야 합니다.")
+    # Mod Record: 덧셈 방식은 유지하며 혼합 정밀도의 평균/분산 누적만 float32로 계산한다.
+    if token_advantages.dtype in (torch.float16, torch.bfloat16):
+        token_advantages = token_advantages.float()
     lengths = torch.as_tensor(completion_lengths, device=token_advantages.device)
     valid_tokens = torch.arange(token_advantages.shape[1], device=lengths.device)[None, :] < lengths[:, None]
     masked = token_advantages.masked_fill(~valid_tokens, 0)

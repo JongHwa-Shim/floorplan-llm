@@ -21,6 +21,8 @@ import copy
 import random
 from dataclasses import dataclass, field
 
+from src.utils.spatial import refresh_spatial_relations
+
 
 # ---------------------------------------------------------------------------
 # 공간 관계 방향 역전 매핑
@@ -133,6 +135,9 @@ def _apply_coord_transform(
             door["y"] = max(0.0, min(ty(door["y"]), float(_MAX_COORD)))
             door["w"] = door["w"] * scale_wh_x
             door["h"] = door["h"] * scale_wh_y
+
+    # Mod Record: 반올림과 비등방 확대까지 반영해 기존 공간 관계를 갱신한다.
+    refresh_spatial_relations(sample)
 
 
 @dataclass
@@ -387,15 +392,6 @@ def flip(sample: dict, rng: random.Random) -> dict:
     ty = (lambda y: _MAX_COORD - y) if do_v else (lambda y: y)
     _apply_coord_transform(sample, tx, ty)
 
-    # spatial 방향 갱신
-    for sp in sample["spatial"]:
-        d = sp["direction"]
-        if do_h:
-            d = _FLIP_H_DIRECTION.get(d, d)
-        if do_v:
-            d = _FLIP_V_DIRECTION.get(d, d)
-        sp["direction"] = d
-
     return sample
 
 
@@ -566,6 +562,9 @@ def compute_drop_state(
     p_pair   = params.get("p_drop_pair",   0.0)
     p_door   = params.get("p_drop_door",   0.0)
     p_sp     = params.get("p_drop_spatial",    0.0)
+    door_mode = params.get("door_drop_mode", "random")
+    if door_mode not in ("random", "position", "orientation", "all"):
+        raise ValueError("door_drop_mode가 지원되는 문 삭제 방식이 아닙니다.")
     p_fd     = params.get("p_drop_front_door", 0.0)
 
     # --- 방 블록 (outline 포함, mutually exclusive) ---
@@ -610,7 +609,8 @@ def compute_drop_state(
         elif roll < p_edge + p_pair + p_door:
             # NO_DOOR 엣지에는 DropEdgeDoor 적용 불가
             if edge["door"]:
-                mode = rng.choice(["position", "orientation", "all"])
+                # Mod Record: 좌표 없는 조건에서는 위치·크기 모두 항상 생략한다.
+                mode = rng.choice(["position", "orientation", "all"]) if door_mode == "random" else door_mode
                 state.drop_door[e_idx] = mode
         # else: 유지
 

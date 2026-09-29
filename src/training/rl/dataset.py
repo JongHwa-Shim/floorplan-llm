@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from datasets import load_from_disk
+from src.build_dataset.json2arrow.split import validate_training_split
 from omegaconf import DictConfig
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer
@@ -69,6 +70,7 @@ class RLPromptDataset(Dataset):
                 f"가능한 split: {list(dataset_dict.keys())}"
             )
         self.dataset = dataset_dict[split]
+        validate_training_split(self.dataset, split, cfg.data.get("held_out_room_count"), arrow_dir)
         logger.info(f"[{split}] Arrow 데이터셋 로드 완료: {len(self.dataset)}개 샘플")
 
         # Vocab 로드 (파서에서 필요)

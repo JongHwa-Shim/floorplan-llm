@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import copy
 import random
+
+from src.utils.spatial import refresh_spatial_relations
 from dataclasses import dataclass
 
 from src.training.augmentation.strategies import (
@@ -89,6 +91,7 @@ class AugmentationConfig:
     p_drop_edge: float = 0.20
     p_drop_pair: float = 0.10
     p_drop_door: float = 0.10
+    door_drop_mode: str = "random"  # random | position | orientation | all
     p_drop_spatial: float = 0.20
     p_drop_front_door: float = 0.15
     p_drop_front_door_coords: float = 0.10
@@ -114,6 +117,7 @@ class AugmentationConfig:
             "p_drop_edge":               self.p_drop_edge,
             "p_drop_pair":               self.p_drop_pair,
             "p_drop_door":               self.p_drop_door,
+            "door_drop_mode":            self.door_drop_mode,
             "p_drop_spatial":            self.p_drop_spatial,
             "p_drop_front_door":             self.p_drop_front_door,
             "p_drop_front_door_coords":      self.p_drop_front_door_coords,
@@ -165,6 +169,7 @@ def config_from_omegaconf(cfg) -> AugmentationConfig:
         p_drop_edge=cfg.drop.get("p_drop_edge", 0.20),
         p_drop_pair=cfg.drop.get("p_drop_pair", 0.10),
         p_drop_door=cfg.drop.get("p_drop_door", 0.10),
+        door_drop_mode=cfg.drop.get("door_mode", "random"),
         p_drop_spatial=cfg.drop.get("p_drop_spatial", 0.20),
         p_drop_front_door=cfg.drop.get("p_drop_front_door", 0.15),
         p_drop_front_door_coords=cfg.drop.get("p_drop_front_door_coords", 0.10),
@@ -278,6 +283,10 @@ class AugmentationPipeline:
         if cfg.do_zoom:
             zoom(sample, rng, zoom_min=cfg.zoom_min, zoom_max=cfg.zoom_max)
             applied_shuffles.append("Zoom")
+
+        # Mod Record: 변환이 꺼져 있어도 과거 Arrow의 방향 라벨을 현재 도형으로 갱신한다.
+        # 입력 전용 노이즈 전에 계산하여 깨끗한 정답의 공간 관계를 유지한다.
+        refresh_spatial_relations(sample)
 
         # 3단계: 삭제 기반 증강 상태 계산
         drop_state = compute_drop_state(sample, cfg.to_drop_params(), rng)

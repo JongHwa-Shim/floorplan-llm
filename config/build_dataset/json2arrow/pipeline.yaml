@@ -17,6 +17,7 @@ validation:
 
 # train/validation/test split 설정
 split:
+  held_out_room_count: null  # null: 모든 개수에서 무작위 분할, 정수: 해당 개수 전체를 학습·검증에서 제외
   enabled: true      # true이면 DatasetDict로 저장, false이면 단일 Dataset으로 저장
   val_size: 1000     # 원본 평면도 단위 validation 개수
   test_size: 1000    # 원본 평면도 단위 test 개수
