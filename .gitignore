@@ -121,12 +121,7 @@ experiments/
 # =============================================================================
 scripts/figures/
 scripts/metrics/*
-!scripts/metrics/_common.py
-!scripts/metrics/compute_novel_metrics.py
 scripts/tables/*
-!scripts/tables/build_ablation_table.py
-!scripts/tables/build_table_2_robustness.py
-!scripts/tables/build_table_3_geometric.py
 scripts/user_study/
 
 # =============================================================================
@@ -198,3 +193,15 @@ trainer_state.json
 *.bak
 /pyproject.toml.rl
 /uv.lock.rl
+
+# 로컬 실험·평가·개발 검증 도구 (공개 코어 파이프라인과 분리)
+/tests/
+/scripts/normalize/
+/scripts/render/
+/scripts/training/augmentation/
+/config/training/augmentation/validate_augmentation/
+/config/training/augmentation/ours_*.yaml
+/scripts/utils/dump_gt_as_generations.py
+/AGENTS.md
+/.codex
+*.bundle
